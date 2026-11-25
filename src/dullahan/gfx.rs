@@ -1,5 +1,6 @@
 //! Immediate-mode OpenGL 3.3 Core renderer:
 //! - Directional 2048x2048 PCF shadow map pass
+//! - Optional omnidirectional (cube map) shadows for up to 4 point lights
 //! - PBR Metallic-Roughness + ORM + Emissive shader (up to 8 point lights + fog + ACES + hot GLSL)
 //! - glTF 2.0 mesh rendering with per-draw named-node TRS overrides & sorted BLEND pass
 //! - Lit solid debug boxes + 3D wireframe/grid/collider debug lines
@@ -22,7 +23,8 @@ use crate::dullahan::platform::{
     GL_ONE_MINUS_SRC_ALPHA, GL_PACK_ALIGNMENT, GL_RENDERBUFFER, GL_REPEAT, GL_RGBA, GL_RGBA8,
     GL_SRC_ALPHA, GL_STATIC_DRAW, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER,
     GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TEXTURE0, GL_TEXTURE1, GL_TEXTURE2, GL_TEXTURE3,
-    GL_TEXTURE4, GL_TRIANGLES, GL_TRUE, GL_UNPACK_ALIGNMENT, GL_UNSIGNED_BYTE, GL_UNSIGNED_INT,
+    GL_TEXTURE4, GL_TEXTURE5, GL_TEXTURE6, GL_TEXTURE7, GL_TEXTURE8, GL_TEXTURE_CUBE_MAP,
+    GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_SEAMLESS, GL_TEXTURE_WRAP_R, GL_TRIANGLES, GL_TRUE, GL_UNPACK_ALIGNMENT, GL_UNSIGNED_BYTE, GL_UNSIGNED_INT,
     GL_VERTEX_SHADER, GLenum, GLint, GLsizei, GLsizeiptr, GLuint, GlFns, InputState, MouseButton,
 };
 use std::ffi::{CString, c_char, c_void};
@@ -31,6 +33,82 @@ use std::ptr;
 
 pub const MAX_POINT_LIGHTS: usize = 8;
 const SHADOW_MAP_SIZE: i32 = 2048;
+/// Point lights that can cast shadows at once (each gets a depth cube map); further lights
+/// asked to cast shadows are lit without them.
+pub const MAX_SHADOWED_POINT_LIGHTS: usize = 4;
+/// Edge length of each face of a point-light shadow cube map.
+pub const POINT_SHADOW_SIZE: i32 = 512;
+/// Near plane of the point-shadow cube faces (metres / world units).
+const POINT_SHADOW_NEAR: f32 = 0.05;
+
+/// (look direction, up) per cube map face, in `GL_TEXTURE_CUBE_MAP_POSITIVE_X + i` order,
+/// following the GL cube map face selection table so a face rendered with
+/// `point_shadow_face_vp` is sampled back by direction.
+const CUBE_FACES: [(Vec3, Vec3); 6] = [
+    (Vec3 { x: 1.0, y: 0.0, z: 0.0 }, Vec3 { x: 0.0, y: -1.0, z: 0.0 }),
+    (Vec3 { x: -1.0, y: 0.0, z: 0.0 }, Vec3 { x: 0.0, y: -1.0, z: 0.0 }),
+    (Vec3 { x: 0.0, y: 1.0, z: 0.0 }, Vec3 { x: 0.0, y: 0.0, z: 1.0 }),
+    (Vec3 { x: 0.0, y: -1.0, z: 0.0 }, Vec3 { x: 0.0, y: 0.0, z: -1.0 }),
+    (Vec3 { x: 0.0, y: 0.0, z: 1.0 }, Vec3 { x: 0.0, y: -1.0, z: 0.0 }),
+    (Vec3 { x: 0.0, y: 0.0, z: -1.0 }, Vec3 { x: 0.0, y: -1.0, z: 0.0 }),
+];
+
+/// View-projection of cube face `face` (0..6) of a point light at `pos` with `radius`.
+pub fn point_shadow_face_vp(pos: Vec3, radius: f32, face: usize) -> Mat4 {
+    let (dir, up) = CUBE_FACES[face];
+    Mat4::perspective(std::f32::consts::FRAC_PI_2, 1.0, POINT_SHADOW_NEAR, radius.max(POINT_SHADOW_NEAR * 2.0))
+        * Mat4::look_at(pos, pos + dir, up)
+}
+
+/// Shadow cube slot (0..MAX_SHADOWED_POINT_LIGHTS) per point light, or -1: the first
+/// `MAX_SHADOWED_POINT_LIGHTS` lights (among the first `MAX_POINT_LIGHTS`) with `shadow` set.
+fn point_shadow_slots(lights: &[PointLight]) -> [i32; MAX_POINT_LIGHTS] {
+    let mut slots = [-1; MAX_POINT_LIGHTS];
+    let mut next = 0;
+    for (i, pl) in lights.iter().take(MAX_POINT_LIGHTS).enumerate() {
+        if pl.shadow && next < MAX_SHADOWED_POINT_LIGHTS && pl.radius > 0.0 {
+            slots[i] = next as i32;
+            next += 1;
+        }
+    }
+    slots
+}
+
+/// Depth cube map (`GL_DEPTH_COMPONENT24`, `size`² per face, nearest, clamped).
+unsafe fn create_depth_cube(gl: &GlFns, size: i32) -> GLuint {
+    let mut tex = 0;
+    unsafe {
+        (gl.glGenTextures)(1, &mut tex);
+        (gl.glBindTexture)(GL_TEXTURE_CUBE_MAP, tex);
+        for f in 0..6 {
+            (gl.glTexImage2D)(
+                GL_TEXTURE_CUBE_MAP_POSITIVE_X + f,
+                0,
+                GL_DEPTH_COMPONENT24 as GLint,
+                size,
+                size,
+                0,
+                GL_DEPTH_COMPONENT,
+                GL_FLOAT,
+                ptr::null(),
+            );
+        }
+        (gl.glTexParameteri)(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        (gl.glTexParameteri)(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        (gl.glTexParameteri)(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        (gl.glTexParameteri)(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        (gl.glTexParameteri)(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        (gl.glBindTexture)(GL_TEXTURE_CUBE_MAP, 0);
+    }
+    tex
+}
+
+fn aabb_touches_sphere(b: Aabb, c: Vec3, r: f32) -> bool {
+    let dx = (b.min.x - c.x).max(0.0).max(c.x - b.max.x);
+    let dy = (b.min.y - c.y).max(0.0).max(c.y - b.max.y);
+    let dz = (b.min.z - c.z).max(0.0).max(c.z - b.max.z);
+    dx * dx + dy * dy + dz * dz <= r * r
+}
 
 // ---------------------------------------------------------------------------
 // Camera, Lights, Overlay & Stats
@@ -134,6 +212,8 @@ pub struct PointLight {
     pub color: Color,
     pub radius: f32,
     pub intensity: f32,
+    /// Casts shadows (omnidirectional cube map), see `DrawList::point_light_shadowed`.
+    pub shadow: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -175,6 +255,9 @@ pub struct FrameStats {
     pub culled: u32,
     /// Instances drawn through `mesh_instances` (main pass).
     pub instances: u32,
+    /// Point lights that cast shadows this frame, and caster draws into their cube faces.
+    pub point_shadow_lights: u32,
+    pub point_shadow_draws: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -814,7 +897,21 @@ impl DrawList {
 
     pub fn point_light(&mut self, pos: Vec3, color: Color, radius: f32, intensity: f32) {
         if self.point_lights.len() < MAX_POINT_LIGHTS {
-            self.point_lights.push(PointLight { pos, color, radius, intensity });
+            self.point_lights.push(PointLight { pos, color, radius, intensity, shadow: false });
+        }
+    }
+
+    /// A point light that casts shadows: opaque meshes, instance batches and shadow-casting
+    /// boxes within `radius` are rendered into a depth cube map (6 faces of
+    /// `POINT_SHADOW_SIZE`²) for it. Up to `MAX_SHADOWED_POINT_LIGHTS` per frame (the first
+    /// ones added); beyond that the light is still drawn, without shadows. Independent of
+    /// `shadows_enabled`, which is the sun's. Each costs 6 extra depth passes over the
+    /// casters within its radius, so keep the radius tight. Keep the light just outside its
+    /// own fixture (a lamp head mesh, a marker `solid_box`): a closed caster around the light
+    /// shadows everything.
+    pub fn point_light_shadowed(&mut self, pos: Vec3, color: Color, radius: f32, intensity: f32) {
+        if self.point_lights.len() < MAX_POINT_LIGHTS {
+            self.point_lights.push(PointLight { pos, color, radius, intensity, shadow: true });
         }
     }
 
@@ -1255,6 +1352,37 @@ const SHADOW_FRAG: &str = r#"#version 330 core
 void main() {}
 "#;
 
+// Point-light shadow pass: depth = distance to the light / radius (linear, so the main pass
+// compares distances directly).
+const POINT_SHADOW_VERT: &str = r#"#version 330 core
+layout(location = 0) in vec3 a_pos;
+#ifdef INSTANCED
+layout(location = 4) in mat4 a_inst;
+uniform mat4 u_node;
+#endif
+uniform mat4 u_light_vp;
+uniform mat4 u_model;
+out vec3 v_world_pos;
+void main() {
+#ifdef INSTANCED
+    mat4 model = u_model * a_inst * u_node;
+#else
+    mat4 model = u_model;
+#endif
+    vec4 wp = model * vec4(a_pos, 1.0);
+    v_world_pos = wp.xyz;
+    gl_Position = u_light_vp * wp;
+}
+"#;
+
+const POINT_SHADOW_FRAG: &str = r#"#version 330 core
+in vec3 v_world_pos;
+uniform vec4 u_light_pos_rad;
+void main() {
+    gl_FragDepth = clamp(length(v_world_pos - u_light_pos_rad.xyz) / u_light_pos_rad.w, 0.0, 1.0);
+}
+"#;
+
 pub const DEFAULT_PBR_VERT: &str = r#"#version 330 core
 layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_norm;
@@ -1328,6 +1456,12 @@ uniform float u_fog_end;
 uniform int u_point_count;
 uniform vec4 u_point_pos_rad[8];
 uniform vec4 u_point_col_int[8];
+// Point-light shadows: cube slot per light (-1 = none) and the cube maps (distance / radius).
+uniform int u_point_shadow_slot[8];
+uniform samplerCube u_point_shadow0;
+uniform samplerCube u_point_shadow1;
+uniform samplerCube u_point_shadow2;
+uniform samplerCube u_point_shadow3;
 
 out vec4 o_color;
 
@@ -1339,6 +1473,33 @@ vec3 to_srgb(vec3 c) { return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)); }
 vec3 aces_tonemap(vec3 x) {
     float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+float point_shadow_depth(int slot, vec3 d) {
+    if (slot == 0) return texture(u_point_shadow0, d).r;
+    if (slot == 1) return texture(u_point_shadow1, d).r;
+    if (slot == 2) return texture(u_point_shadow2, d).r;
+    return texture(u_point_shadow3, d).r;
+}
+
+// 1 = lit, 0 = shadowed. `from_light` = fragment - light, `dist` its length.
+float calc_point_shadow(int slot, vec3 from_light, float dist, float rad, vec3 N) {
+    if (slot < 0) return 1.0;
+    vec3 d = from_light / max(dist, 1e-4);
+    float ndl = max(dot(N, -d), 0.0);
+    float cur = (dist - (0.04 + 0.12 * (1.0 - ndl)) - 0.004 * dist) / rad;  // slope-scaled bias
+    vec3 t1 = normalize(cross(d, abs(d.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+    vec3 t2 = cross(d, t1);
+    float k = 2.5 / 512.0;  // ~ a few texels of a 512² face
+    float lit = 0.0;
+    lit += cur <= point_shadow_depth(slot, d) ? 1.0 : 0.0;
+    lit += cur <= point_shadow_depth(slot, d + t1 * k) ? 1.0 : 0.0;
+    lit += cur <= point_shadow_depth(slot, d - t1 * k) ? 1.0 : 0.0;
+    lit += cur <= point_shadow_depth(slot, d + t2 * k) ? 1.0 : 0.0;
+    lit += cur <= point_shadow_depth(slot, d - t2 * k) ? 1.0 : 0.0;
+    lit += cur <= point_shadow_depth(slot, d + (t1 + t2) * k) ? 1.0 : 0.0;
+    lit += cur <= point_shadow_depth(slot, d - (t1 + t2) * k) ? 1.0 : 0.0;
+    return lit / 7.0;
 }
 
 float calc_shadow(vec4 lp, vec3 N, vec3 L) {
@@ -1406,7 +1567,7 @@ void main() {
         float rad = max(u_point_pos_rad[i].w, 0.001);
         if (dist < rad) {
             float att = clamp(1.0 - dist / rad, 0.0, 1.0);
-            att = att * att * u_point_col_int[i].w;
+            att = att * att * u_point_col_int[i].w * calc_point_shadow(u_point_shadow_slot[i], -to_l, dist, rad, N);
             Lo += eval_pbr_light(N, V, to_l / max(dist, 1e-4), to_linear(u_point_col_int[i].rgb) * att * 2.0, albedo, metallic, roughness, F0);
         }
     }
@@ -1690,16 +1851,21 @@ struct PbrUniforms {
     point_count: GLint,
     point_pos_rad: [GLint; MAX_POINT_LIGHTS],
     point_col_int: [GLint; MAX_POINT_LIGHTS],
+    point_shadow_slot: [GLint; MAX_POINT_LIGHTS],
+    point_shadow: [GLint; MAX_SHADOWED_POINT_LIGHTS],
 }
 
 impl PbrUniforms {
     fn query(gl: &GlFns, prog: GLuint) -> Self {
         let mut point_pos_rad = [-1; MAX_POINT_LIGHTS];
         let mut point_col_int = [-1; MAX_POINT_LIGHTS];
+        let mut point_shadow_slot = [-1; MAX_POINT_LIGHTS];
         for i in 0..MAX_POINT_LIGHTS {
             point_pos_rad[i] = uniform_loc(gl, prog, &format!("u_point_pos_rad[{i}]"));
             point_col_int[i] = uniform_loc(gl, prog, &format!("u_point_col_int[{i}]"));
+            point_shadow_slot[i] = uniform_loc(gl, prog, &format!("u_point_shadow_slot[{i}]"));
         }
+        let point_shadow = std::array::from_fn(|i| uniform_loc(gl, prog, &format!("u_point_shadow{i}")));
         Self {
             view_proj: uniform_loc(gl, prog, "u_view_proj"),
             model: uniform_loc(gl, prog, "u_model"),
@@ -1729,11 +1895,23 @@ impl PbrUniforms {
             point_count: uniform_loc(gl, prog, "u_point_count"),
             point_pos_rad,
             point_col_int,
+            point_shadow_slot,
+            point_shadow,
         }
     }
 }
 
 pub struct Gfx {
+    // Point-light shadows: depth programs, one FBO, cube maps allocated on first use, and a
+    // 1x1 placeholder cube bound to unused slots (samplerCube uniforms must see a cube map).
+    point_shadow_prog: GLuint,
+    point_shadow_inst_prog: GLuint,
+    u_ps: [GLint; 4],      // light_vp, model, light_pos_rad, (node: -1)
+    u_ps_inst: [GLint; 4], // light_vp, model, light_pos_rad, node
+    point_shadow_fbo: GLuint,
+    point_shadow_cubes: Vec<GLuint>,
+    point_shadow_dummy: GLuint,
+
     shadow_prog: GLuint,
     u_shadow_lvp: GLint,
     u_shadow_model: GLint,
@@ -1819,6 +1997,16 @@ impl Gfx {
         let pbr_prog = compile_program(gl, DEFAULT_PBR_VERT, DEFAULT_PBR_FRAG)?;
         let pbr_inst_prog = compile_program(gl, &with_define(DEFAULT_PBR_VERT, "INSTANCED"), DEFAULT_PBR_FRAG)?;
         let shadow_inst_prog = compile_program(gl, &with_define(SHADOW_VERT, "INSTANCED"), SHADOW_FRAG)?;
+        let point_shadow_prog = compile_program(gl, POINT_SHADOW_VERT, POINT_SHADOW_FRAG)?;
+        let point_shadow_inst_prog = compile_program(gl, &with_define(POINT_SHADOW_VERT, "INSTANCED"), POINT_SHADOW_FRAG)?;
+        let ps_locs = |p: GLuint| [uniform_loc(gl, p, "u_light_vp"), uniform_loc(gl, p, "u_model"), uniform_loc(gl, p, "u_light_pos_rad"), uniform_loc(gl, p, "u_node")];
+        let (u_ps, u_ps_inst) = (ps_locs(point_shadow_prog), ps_locs(point_shadow_inst_prog));
+        let mut point_shadow_fbo = 0;
+        unsafe {
+            (gl.glGenFramebuffers)(1, &mut point_shadow_fbo);
+            (gl.glEnable)(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+        }
+        let point_shadow_dummy = unsafe { create_depth_cube(gl, 1) };
         let solid_prog = compile_program(gl, SOLID_VERT, SOLID_FRAG)?;
         let line_prog = compile_program(gl, LINE_VERT, LINE_FRAG)?;
         let ui_prog = compile_program(gl, UI_VERT, UI_FRAG)?;
@@ -1950,6 +2138,13 @@ impl Gfx {
             u_shadow_inst_model: uniform_loc(gl, shadow_inst_prog, "u_model"),
             u_shadow_inst_node: uniform_loc(gl, shadow_inst_prog, "u_node"),
             shadow_inst_prog,
+            point_shadow_prog,
+            point_shadow_inst_prog,
+            u_ps,
+            u_ps_inst,
+            point_shadow_fbo,
+            point_shadow_cubes: Vec::new(),
+            point_shadow_dummy,
             u_solid_vp: uniform_loc(gl, solid_prog, "u_view_proj"),
             u_solid_model: uniform_loc(gl, solid_prog, "u_model"),
             u_solid_lvp: uniform_loc(gl, solid_prog, "u_light_vp"),
@@ -2011,6 +2206,19 @@ impl Gfx {
 
     /// Hot-reloads the PBR shader program from optional disk overrides (falling back to built-in
     /// defaults for whichever stage is `None`). Keeps the previous program active on compile error.
+    /// Allocate cube maps until there are `n` (they're kept for later frames).
+    unsafe fn ensure_point_shadow_cubes(&mut self, gl: &GlFns, n: usize) {
+        while self.point_shadow_cubes.len() < n {
+            let tex = unsafe { create_depth_cube(gl, POINT_SHADOW_SIZE) };
+            self.point_shadow_cubes.push(tex);
+        }
+        unsafe {
+            (gl.glBindFramebuffer)(GL_FRAMEBUFFER, self.point_shadow_fbo);
+            (gl.glDrawBuffer)(GL_NONE);
+            (gl.glReadBuffer)(GL_NONE);
+        }
+    }
+
     pub fn reload_pbr_shader(
         &mut self,
         gl: &GlFns,
@@ -2146,6 +2354,26 @@ impl Gfx {
         let light_vp = Mat4::ortho(-ext, ext, -ext, ext, 0.5, ext * 5.0)
             * Mat4::look_at(light_pos, center, light_up);
 
+        // Point lights that cast shadows this frame, in cube slot order.
+        let ps_slots = point_shadow_slots(&draw.point_lights);
+        let mut ps_lights: Vec<PointLight> = Vec::new();
+        for (i, &slot) in ps_slots.iter().enumerate() {
+            if slot >= 0 {
+                ps_lights.push(draw.point_lights[i]);
+            }
+        }
+        // Bit per shadowed point light whose sphere `b` touches.
+        let point_mask = |b: Aabb| -> u32 {
+            let mut m = 0;
+            for (s, pl) in ps_lights.iter().enumerate() {
+                if aabb_touches_sphere(b, pl.pos, pl.radius) {
+                    m |= 1 << s;
+                }
+            }
+            m
+        };
+        let everywhere = Aabb::from_center_half(Vec3::ZERO, Vec3::new(1e30, 1e30, 1e30));
+
         // Frustum culling: (visible in main pass, casts into shadow map)
         let cull = draw.frustum_culling;
         let view_frustum = Frustum::from_view_proj(vp);
@@ -2168,6 +2396,9 @@ impl Gfx {
             in_view: bool,
             in_shadow: bool,
             instances: Option<&'a GpuInstances>,
+            /// World bounds of the draw command, and the shadowed point lights it can reach.
+            bounds: Aabb,
+            point_mask: u32,
         }
         let mut opaque_prims: Vec<FlatPrim<'_>> = Vec::new();
         let mut blend_prims: Vec<FlatPrim<'_>> = Vec::new();
@@ -2175,14 +2406,17 @@ impl Gfx {
 
         for cmd in &draw.meshes {
             let Some(gpu_mesh) = assets.mesh(cmd.handle) else { continue };
-            let (in_view, in_shadow) = if cmd.node_overrides.is_empty() {
-                visibility(gpu_mesh.bounds.transformed(cmd.model))
+            let (in_view, in_shadow, bounds) = if cmd.node_overrides.is_empty() {
+                let b = gpu_mesh.bounds.transformed(cmd.model);
+                let (v, s) = visibility(b);
+                (v, s, b)
             } else {
-                (true, true)
+                (true, true, everywhere)
             };
+            let pmask = if ps_lights.is_empty() { 0 } else if cmd.node_overrides.is_empty() { point_mask(bounds) } else { u32::MAX };
             if !in_view {
                 stats.culled += 1;
-                if !in_shadow {
+                if !in_shadow && pmask == 0 {
                     continue;
                 }
             }
@@ -2206,7 +2440,10 @@ impl Gfx {
 
                 for prim in prims {
                     let mat = &gpu_mesh.materials[prim.material_idx];
-                    let item = FlatPrim { prim, mat, model: world_m, node_model: Mat4::IDENTITY, tint: cmd.tint, cam_dist_sq: dist_sq, in_view, in_shadow, instances: None };
+                    let item = FlatPrim {
+                        prim, mat, model: world_m, node_model: Mat4::IDENTITY, tint: cmd.tint, cam_dist_sq: dist_sq,
+                        in_view, in_shadow, instances: None, bounds, point_mask: pmask,
+                    };
                     if mat.alpha_mode == AlphaMode::Blend || cmd.tint.a < 0.999 {
                         if in_view {
                             blend_prims.push(item);
@@ -2225,10 +2462,12 @@ impl Gfx {
             if inst.count == 0 {
                 continue;
             }
-            let (in_view, in_shadow) = visibility(inst.world_bounds(gpu_mesh.bounds, cmd.model));
+            let bounds = inst.world_bounds(gpu_mesh.bounds, cmd.model);
+            let (in_view, in_shadow) = visibility(bounds);
+            let pmask = if ps_lights.is_empty() { 0 } else { point_mask(bounds) };
             if !in_view {
                 stats.culled += 1;
-                if !in_shadow {
+                if !in_shadow && pmask == 0 {
                     continue;
                 }
             }
@@ -2243,7 +2482,7 @@ impl Gfx {
                     let mat = &gpu_mesh.materials[prim.material_idx];
                     inst_prims.push(FlatPrim {
                         prim, mat, model: cmd.model, node_model: node_mats[ni], tint: cmd.tint,
-                        cam_dist_sq: 0.0, in_view, in_shadow, instances: Some(inst),
+                        cam_dist_sq: 0.0, in_view, in_shadow, instances: Some(inst), bounds, point_mask: pmask,
                     });
                 }
             }
@@ -2309,6 +2548,77 @@ impl Gfx {
                 (gl.glColorMask)(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
             }
 
+            // 0b. Point-light shadow cube maps: per shadowed light, 6 faces of linear
+            // distance-to-light, drawn from the casters that reach it (and that face).
+            stats.point_shadow_lights = ps_lights.len() as u32;
+            if !ps_lights.is_empty() {
+                self.ensure_point_shadow_cubes(gl, ps_lights.len());
+                (gl.glBindFramebuffer)(GL_FRAMEBUFFER, self.point_shadow_fbo);
+                (gl.glViewport)(0, 0, POINT_SHADOW_SIZE, POINT_SHADOW_SIZE);
+                (gl.glEnable)(GL_DEPTH_TEST);
+                (gl.glDepthFunc)(GL_LESS);
+                (gl.glDepthMask)(GL_TRUE);
+                (gl.glColorMask)(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+                (gl.glCullFace)(GL_FRONT);
+                for (slot, pl) in ps_lights.iter().enumerate() {
+                    let cube = self.point_shadow_cubes[slot];
+                    let bit = 1u32 << slot;
+                    for face in 0..6 {
+                        (gl.glFramebufferTexture2D)(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_CUBE_MAP_POSITIVE_X + face as GLenum, cube, 0);
+                        (gl.glClear)(GL_DEPTH_BUFFER_BIT);
+                        let fvp = point_shadow_face_vp(pl.pos, pl.radius, face);
+                        let fr = Frustum::from_view_proj(fvp);
+                        let reaches = |p: &FlatPrim<'_>| p.point_mask & bit != 0 && fr.intersects_aabb(p.bounds);
+
+                        (gl.glUseProgram)(self.point_shadow_prog);
+                        (gl.glUniformMatrix4fv)(self.u_ps[0], 1, GL_FALSE, fvp.m.as_ptr());
+                        (gl.glUniform4f)(self.u_ps[2], pl.pos.x, pl.pos.y, pl.pos.z, pl.radius);
+                        for item in opaque_prims.iter().filter(|p| reaches(p)) {
+                            if item.mat.double_sided {
+                                (gl.glDisable)(GL_CULL_FACE);
+                            } else {
+                                (gl.glEnable)(GL_CULL_FACE);
+                            }
+                            (gl.glUniformMatrix4fv)(self.u_ps[1], 1, GL_FALSE, item.model.m.as_ptr());
+                            (gl.glBindVertexArray)(item.prim.vao);
+                            (gl.glDrawElements)(GL_TRIANGLES, item.prim.index_count, GL_UNSIGNED_INT, ptr::null());
+                            stats.point_shadow_draws += 1;
+                        }
+                        (gl.glEnable)(GL_CULL_FACE);
+                        (gl.glBindVertexArray)(self.cube_vao);
+                        for b in draw.boxes.iter().filter(|b| b.cast_shadow) {
+                            let bb = Aabb::from_center_half(Vec3::ZERO, Vec3::new(0.5, 0.5, 0.5)).transformed(b.model);
+                            if aabb_touches_sphere(bb, pl.pos, pl.radius) && fr.intersects_aabb(bb) {
+                                (gl.glUniformMatrix4fv)(self.u_ps[1], 1, GL_FALSE, b.model.m.as_ptr());
+                                (gl.glDrawArrays)(GL_TRIANGLES, 0, 36);
+                                stats.point_shadow_draws += 1;
+                            }
+                        }
+
+                        if inst_prims.iter().any(&reaches) {
+                            (gl.glUseProgram)(self.point_shadow_inst_prog);
+                            (gl.glUniformMatrix4fv)(self.u_ps_inst[0], 1, GL_FALSE, fvp.m.as_ptr());
+                            (gl.glUniform4f)(self.u_ps_inst[2], pl.pos.x, pl.pos.y, pl.pos.z, pl.radius);
+                            for item in inst_prims.iter().filter(|p| reaches(p)) {
+                                if item.mat.double_sided {
+                                    (gl.glDisable)(GL_CULL_FACE);
+                                } else {
+                                    (gl.glEnable)(GL_CULL_FACE);
+                                }
+                                (gl.glUniformMatrix4fv)(self.u_ps_inst[1], 1, GL_FALSE, item.model.m.as_ptr());
+                                (gl.glUniformMatrix4fv)(self.u_ps_inst[3], 1, GL_FALSE, item.node_model.m.as_ptr());
+                                (gl.glBindVertexArray)(item.prim.vao);
+                                draw_elements_instanced(gl, item.prim, item.instances.unwrap());
+                                stats.point_shadow_draws += 1;
+                            }
+                            (gl.glEnable)(GL_CULL_FACE);
+                        }
+                    }
+                }
+                (gl.glCullFace)(GL_BACK);
+                (gl.glColorMask)(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            }
+
             // Main Scene Framebuffer Setup (render into scene_fbo when post-processing is active)
             let use_post = draw.post.enabled && self.ensure_scene_fbo(gl, width, height);
             let scene_target = if use_post { self.scene_fbo } else { default_fbo };
@@ -2345,6 +2655,14 @@ impl Gfx {
             // Bind shadow map on texture unit 4 for both solid and PBR passes
             (gl.glActiveTexture)(GL_TEXTURE4);
             (gl.glBindTexture)(GL_TEXTURE_2D, self.shadow_tex);
+            // Point-shadow cubes on units 5..9: this frame's, else the placeholder (a
+            // samplerCube must never see a 2D texture).
+            for (s, unit) in [GL_TEXTURE5, GL_TEXTURE6, GL_TEXTURE7, GL_TEXTURE8].into_iter().enumerate() {
+                let tex = if s < ps_lights.len() { self.point_shadow_cubes[s] } else { self.point_shadow_dummy };
+                (gl.glActiveTexture)(unit);
+                (gl.glBindTexture)(GL_TEXTURE_CUBE_MAP, tex);
+            }
+            (gl.glActiveTexture)(GL_TEXTURE0);
 
             let poly_mode = if draw.overlay == DebugOverlay::Wireframe { GL_LINE } else { GL_FILL };
             let sh_flag = if draw.shadows_enabled { 1.0 } else { 0.0 };
@@ -2666,6 +2984,14 @@ impl Gfx {
                 (gl.glUniform4f)(u.point_pos_rad[i], pl.pos.x, pl.pos.y, pl.pos.z, pl.radius);
                 (gl.glUniform4f)(u.point_col_int[i], pl.color.r, pl.color.g, pl.color.b, pl.intensity);
             }
+            // Point-shadow cubes live on texture units 5..9 (bound by `render`).
+            let slots = point_shadow_slots(&draw.point_lights);
+            for i in 0..MAX_POINT_LIGHTS {
+                (gl.glUniform1i)(u.point_shadow_slot[i], slots[i]);
+            }
+            for (s, &loc) in u.point_shadow.iter().enumerate() {
+                (gl.glUniform1i)(loc, 5 + s as GLint);
+            }
         }
     }
 
@@ -2759,6 +3085,12 @@ impl Gfx {
         unsafe {
             (gl.glDeleteFramebuffers)(1, &self.shadow_fbo);
             (gl.glDeleteTextures)(1, &self.shadow_tex);
+            (gl.glDeleteFramebuffers)(1, &self.point_shadow_fbo);
+            for t in self.point_shadow_cubes.iter().chain(std::iter::once(&self.point_shadow_dummy)) {
+                (gl.glDeleteTextures)(1, t);
+            }
+            (gl.glDeleteProgram)(self.point_shadow_prog);
+            (gl.glDeleteProgram)(self.point_shadow_inst_prog);
             if self.scene_fbo != 0 {
                 (gl.glDeleteFramebuffers)(1, &self.scene_fbo);
                 (gl.glDeleteTextures)(1, &self.scene_tex);
@@ -2865,4 +3197,49 @@ fn build_unit_cube_vertices() -> Vec<f32> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dullahan::math::Vec4;
+
+    /// Each cube face's view-projection must put a direction where the GL cube map face
+    /// selection table samples it from: for the major axis `ma`, NDC (x, y) = (sc, tc) / |ma|
+    /// (OpenGL 3.3 core spec, table 3.21), so a shadow rendered into face i is read back by
+    /// direction in the main pass.
+    #[test]
+    fn point_shadow_faces_match_gl_cube_map_convention() {
+        let pos = Vec3::new(3.0, -2.0, 5.0);
+        let dirs = [
+            Vec3::new(1.0, 0.3, -0.2), Vec3::new(-1.0, -0.4, 0.5), Vec3::new(0.2, 1.0, 0.6),
+            Vec3::new(-0.3, -1.0, 0.1), Vec3::new(0.5, -0.2, 1.0), Vec3::new(-0.6, 0.4, -1.0),
+            Vec3::new(0.9, 0.8, 0.1), Vec3::new(-0.1, 0.7, -0.75),
+        ];
+        for r in dirs {
+            let (ax, ay, az) = (r.x.abs(), r.y.abs(), r.z.abs());
+            // (face, sc, tc, |ma|) per the spec table
+            let (face, sc, tc, ma) = if ax >= ay && ax >= az {
+                if r.x > 0.0 { (0, -r.z, -r.y, ax) } else { (1, r.z, -r.y, ax) }
+            } else if ay >= az {
+                if r.y > 0.0 { (2, r.x, r.z, ay) } else { (3, r.x, -r.z, ay) }
+            } else if r.z > 0.0 {
+                (4, r.x, -r.y, az)
+            } else {
+                (5, -r.x, -r.y, az)
+            };
+            let p = pos + r * 2.0;
+            let c = point_shadow_face_vp(pos, 10.0, face).mul_vec4(Vec4::new(p.x, p.y, p.z, 1.0));
+            let (nx, ny) = (c.x / c.w, c.y / c.w);
+            assert!((nx - sc / ma).abs() < 1e-4 && (ny - tc / ma).abs() < 1e-4, "face {face} dir {r:?}: ndc ({nx}, {ny}) vs ({}, {})", sc / ma, tc / ma);
+            assert!(c.w > 0.0 && (c.z / c.w).abs() <= 1.0, "face {face}: point not inside the depth range");
+        }
+    }
+
+    #[test]
+    fn point_shadow_slots_pick_first_shadowed_lights() {
+        let pl = |shadow| PointLight { pos: Vec3::ZERO, color: Color::WHITE, radius: 5.0, intensity: 1.0, shadow };
+        let lights = [pl(false), pl(true), pl(true), pl(false), pl(true), pl(true), pl(true), pl(true)];
+        assert_eq!(point_shadow_slots(&lights), [-1, 0, 1, -1, 2, 3, -1, -1]);
+    }
 }

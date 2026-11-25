@@ -149,11 +149,19 @@ Every loader is pure Rust, panic-free on malformed input, and returns clear `fil
 No scene graph, no retained entity handles inside the renderer. Each frame, the game pushes draw commands into `DrawList`, and `end_frame()` sorts and executes them in minimal passes:
 
 1. **Shadow Pass (optional single directional shadow map, e.g. 2048×2048 PCF):** Casts crisp grounding shadows for 3D readability.
+   - **Point-light shadows (opt-in per light):**
+     - **API:** `draw.point_light_shadowed(pos, col, rad, int)` gives a light an omnidirectional shadow: a 512² depth cube map (`POINT_SHADOW_SIZE`) holding linear distance-to-light / radius.
+     - **Limit:** up to `MAX_SHADOWED_POINT_LIGHTS` (4) per frame, the first ones added; further lights are lit without shadows.
+     - **Pass:** each light renders 6 faces with front-face culling, like the sun's pass. A caster is drawn into a face only if its bounds touch the light's sphere and that face's frustum. Opaque meshes, instance batches and shadow-casting boxes all cast.
+     - **Main pass:** the PBR shader samples the cubes on texture units 5–8 with a 7-tap PCF and a slope-scaled bias. Unused units get a 1×1 placeholder cube.
+     - **Cost and compatibility:** cube maps are allocated on first use, so scenes without shadowed point lights pay nothing and render as before. Independent of `shadows_enabled` (the sun's).
+     - **Custom shaders:** `pbr.frag` overrides without the new uniforms keep working, without point shadows.
+     - **Fixtures:** keep the light just outside its own fixture: a closed caster around the light shadows everything.
 2. **Opaque PBR Pass:**
    - Standard metallic-roughness PBR + hemisphere ambient + 1 directional sun + up to 8 dynamic point lights + linear/exp distance fog.
    - Draw calls sorted by `(shader, material/texture, mesh)` so shared-palette models automatically minimize state switches.
    - **Instancing:** `draw.mesh_instances(mesh, instances, transform, tint)` draws a static GPU buffer of per-instance `Mat4`s (`app.create_instances`) with one `glDrawElementsInstanced` per primitive, in both the shadow and main pass (default shaders compiled a second time with `#define INSTANCED`; custom `pbr.vert` overrides need the same `#ifdef INSTANCED` block). For forests, crowds, debris.
-   - **Frustum culling:** with `draw.frustum_culling` (default on), mesh draws and instance batches whose bounds are outside the camera frustum skip the main pass, and those outside the light frustum skip the shadow pass. Draws with node overrides are never culled. `FrameStats::culled` / `instances` report it.
+   - **Frustum culling:** with `draw.frustum_culling` (default on), mesh draws and instance batches whose bounds are outside the camera frustum skip the main pass, and those outside the light frustum skip the shadow pass. Draws with node overrides are never culled. `FrameStats::culled` / `instances` report it, and `point_shadow_lights` / `point_shadow_draws` the point-shadow pass.
    - Supports per-draw `Transform`, optional `node_overrides` slice, and color tint/emissive boost (great for hit-flash!).
 3. **Terrain Pass (optional helper):**
    - Renders either a regular `.glb` terrain mesh *or* a heightmap + 4-channel RGBA splatmap + normal map terrain using the exact same PBR lighting model.

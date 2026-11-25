@@ -256,6 +256,14 @@ pub const GL_TEXTURE1: GLenum = 0x84C1;
 pub const GL_TEXTURE2: GLenum = 0x84C2;
 pub const GL_TEXTURE3: GLenum = 0x84C3;
 pub const GL_TEXTURE4: GLenum = 0x84C4;
+pub const GL_TEXTURE5: GLenum = 0x84C5;
+pub const GL_TEXTURE6: GLenum = 0x84C6;
+pub const GL_TEXTURE7: GLenum = 0x84C7;
+pub const GL_TEXTURE8: GLenum = 0x84C8;
+pub const GL_TEXTURE_CUBE_MAP: GLenum = 0x8513;
+pub const GL_TEXTURE_CUBE_MAP_POSITIVE_X: GLenum = 0x8515;
+pub const GL_TEXTURE_CUBE_MAP_SEAMLESS: GLenum = 0x884F;
+pub const GL_TEXTURE_WRAP_R: GLenum = 0x8072;
 
 pub const GL_ARRAY_BUFFER: GLenum = 0x8892;
 pub const GL_ELEMENT_ARRAY_BUFFER: GLenum = 0x8893;
