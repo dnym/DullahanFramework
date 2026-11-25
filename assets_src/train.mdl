@@ -1,0 +1,30 @@
+pal synthwave.pal
+# Main body hull (length 11.4m along Z, width 2.25m, height 2.85m)
+box hull_violet 0,0.32,0 2.26,2.50,10.6 a=b bev=0.10 wn=1
+# Undercarriage / bogies
+box obsidian 0,0.0,0 1.95,0.36,10.8 a=b bev=0.04
+# Aerodynamic front cab (+Z facing oncoming player)
+box hull_slate 0,0.34,5.45 2.18,2.25,0.85 a=b bev=0.12 t=0.82,0.72 wn=1
+# Blazing twin headlights + glowing front bumper bar (+Z)
+box neon_white -0.68,1.02,5.90 0.44,0.22,0.08 a=c
+box neon_white 0.68,1.02,5.90 0.44,0.22,0.08 a=c
+box neon_magenta 0,0.56,5.90 1.85,0.12,0.08 a=c
+# Glowing cyan front windshield
+box neon_cyan 0,1.92,5.80 1.72,0.52,0.10 a=c r=-12,0,0
+# Neon side racing stripes & glowing side windows
+box neon_magenta -1.15,1.10,0 0.05,0.14,10.2 a=c
+box neon_magenta 1.15,1.10,0 0.05,0.14,10.2 a=c
+box neon_cyan -1.15,1.90,0 0.05,0.42,8.8 a=c
+box neon_cyan 1.15,1.90,0 0.05,0.42,8.8 a=c
+# Roof deck trim & walkable cyan guide rails (Y=2.85)
+box deck_dark 0,2.82,0 2.02,0.08,10.2 a=b bev=0.02
+box neon_cyan -0.96,2.88,0 0.07,0.06,10.0 a=c
+box neon_cyan 0.96,2.88,0 0.07,0.06,10.0 a=c
+box hull_slate 0,2.86,-3.2 1.35,0.14,1.6 a=b bev=0.03
+box hull_slate 0,2.86,2.2 1.35,0.14,1.6 a=b bev=0.03
+# Rear taillights (-Z)
+box neon_orange -0.68,1.05,-5.32 0.46,0.24,0.06 a=c
+box neon_orange 0.68,1.05,-5.32 0.46,0.24,0.06 a=c
+col col_train
+  box obsidian 0,0,0 2.26,2.88,11.6 a=b
+end

@@ -1,0 +1,9 @@
+pal synthwave.pal
+wdg hull_violet 0,0,0 2.22,2.84,6.4 a=b
+# Side glowing guide rails along slope
+box neon_cyan -1.12,1.44,0 0.09,0.14,7.0 r=24,0,0 a=c
+box neon_cyan 1.12,1.44,0 0.09,0.14,7.0 r=24,0,0 a=c
+# Bright golden arrow bars on ramp surface
+box neon_gold 0,0.68,1.72 1.4,0.06,0.26 r=24,0,0 a=c
+box neon_gold 0,1.46,0.0 1.4,0.06,0.26 r=24,0,0 a=c
+box neon_gold 0,2.24,-1.72 1.4,0.06,0.26 r=24,0,0 a=c

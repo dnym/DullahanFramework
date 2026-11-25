@@ -1,0 +1,5 @@
+sfx crash dur=0.62 sr=44100 ch=2 norm=-1
+osc sin 120 penv=140>28:0.32:exp env=0.002,0.38,0,0.12 g=0.95 | drv 0.55
+osc saw 260 penv=260>55:0.45:exp env=0.004,0.42,0,0.15 g=0.45 | crush 6 rate=8000
+noi brown env=0.002,0.42,0,0.14 g=0.80 | flt lp 2200
+bus | flt hp 28 | rev room=0.45 mix=0.20

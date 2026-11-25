@@ -1,0 +1,17 @@
+grid 4x4@16
+obsidian      #141226 0.65 0.35
+deck_dark     #1A1633 0.72 0.25
+hull_violet   #261D4A 0.42 0.55
+hull_slate    #2B324C 0.38 0.65
+chrome        #B8C8E0 0.18 0.92
+jacket_teal   #185E78 0.48 0.15
+jacket_pink   #9E1E66 0.45 0.15
+visor_dark    #0B0E1A 0.10 0.85
+neon_cyan     #30F8FF 0.15 0.05 #00EEFF
+neon_magenta  #FF38A8 0.15 0.05 #FF1898
+neon_gold     #FFD84A 0.18 0.20 #FFBE22
+neon_orange   #FF6628 0.18 0.10 #FF4814
+neon_lime     #48FF92 0.15 0.05 #22FF78
+neon_white    #FFFFFF 0.10 0.00 #F0F6FF
+holo_cyan     #40F4FF88 0.10 0.05 #00CCEE
+holo_pink     #FF38A888 0.10 0.05 #EE1888

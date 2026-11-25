@@ -1,0 +1,4 @@
+sfx nearmiss dur=0.22 sr=44100 ch=2 norm=-3
+osc sin 660 penv=520>1180:0.14:exp env=0.003,0.16,0,0.04 g=0.65
+noi white env=0.01,0.15,0,0.04 g=0.35 | flt bp 3200 q=2.0
+bus | flt hp 180

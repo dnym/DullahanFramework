@@ -1,0 +1,11 @@
+pal synthwave.pal
+box hull_slate -1.05,0,0 0.24,1.05,0.34 a=b bev=0.03 wn=1
+box hull_slate 1.05,0,0 0.24,1.05,0.34 a=b bev=0.03 wn=1
+box obsidian 0,0.24,0 2.15,0.22,0.20 a=c
+box neon_orange 0,0.78,0 2.18,0.28,0.14 a=c bev=0.02
+box neon_gold -0.60,0.78,0.08 0.24,0.24,0.04 a=c
+box neon_gold 0.0,0.78,0.08 0.24,0.24,0.04 a=c
+box neon_gold 0.60,0.78,0.08 0.24,0.24,0.04 a=c
+col col_low
+  box obsidian 0,0,0 2.25,1.05,0.40 a=b
+end

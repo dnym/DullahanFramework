@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <circle cx="128" cy="128" r="122" fill="#FF2088" opacity="0.22"/>
+  <circle cx="128" cy="128" r="108" fill="#FF6B28" opacity="0.20"/>
+  <!-- Upper solid golden-to-amber semicircle slices (exact chords of r=100 circle) -->
+  <rect x="76" y="42" width="104" height="10" rx="5" fill="#FFF066"/>
+  <rect x="58" y="50" width="140" height="14" rx="6" fill="#FFE654"/>
+  <rect x="44" y="62" width="168" height="16" rx="6" fill="#FFD844"/>
+  <rect x="35" y="76" width="186" height="18" rx="6" fill="#FFC436"/>
+  <rect x="30" y="92" width="196" height="18" rx="5" fill="#FFAA2E"/>
+  <rect x="28" y="108" width="200" height="18" rx="4" fill="#FF8E2B"/>
+  <!-- Lower retro Outrun slices with TRUE transparent gaps! -->
+  <rect x="29" y="131" width="198" height="16" rx="4" fill="#FF6F34"/>
+  <rect x="34" y="153" width="188" height="14" rx="4" fill="#FF4B4E"/>
+  <rect x="44" y="173" width="168" height="12" rx="4" fill="#FF2872"/>
+  <rect x="59" y="191" width="138" height="10" rx="4" fill="#E8148E"/>
+  <rect x="79" y="207" width="98" height="8" rx="4" fill="#B8109A"/>
+  <rect x="101" y="220" width="54" height="6" rx="3" fill="#8C0C9E"/>
+</svg>

@@ -106,6 +106,8 @@ pub struct PostSettings {
     pub vignette: f32,
     pub bloom_strength: f32,
     pub bloom_threshold: f32,
+    pub chroma: f32,
+    pub time: f32,
     pub tint: Color,
 }
 
@@ -119,6 +121,8 @@ impl Default for PostSettings {
             vignette: 0.14,
             bloom_strength: 0.22,
             bloom_threshold: 0.85,
+            chroma: 0.0,
+            time: 0.0,
             tint: Color::WHITE,
         }
     }
@@ -599,6 +603,8 @@ struct UiVertex {
 pub struct DrawList {
     pub camera: Camera3D,
     pub clear_color: Color,
+    /// Optional vertical sky backdrop `(zenith_color, horizon_color)` drawn behind the 3D scene.
+    pub sky_gradient: Option<(Color, Color)>,
     pub sun_dir: Vec3,
     pub sun_color: Color,
     pub sky_color: Color,
@@ -624,6 +630,7 @@ impl Default for DrawList {
         Self {
             camera: Camera3D::default(),
             clear_color: Color::from_hex(0x95B8DC),
+            sky_gradient: None,
             sun_dir: Vec3::new(0.45, 0.82, 0.36).norm(),
             sun_color: Color::rgb(1.0, 0.96, 0.88),
             sky_color: Color::rgb(0.42, 0.56, 0.72),
@@ -1304,6 +1311,18 @@ void main() {
 }
 "#;
 
+const SKY_FRAG: &str = r#"#version 330 core
+in vec2 v_uv;
+uniform vec3 u_sky_top;
+uniform vec3 u_sky_horizon;
+out vec4 o_color;
+void main() {
+    float t = clamp(pow(clamp(v_uv.y, 0.0, 1.0), 0.72), 0.0, 1.0);
+    vec3 col = mix(u_sky_horizon, u_sky_top, t);
+    o_color = vec4(col, 1.0);
+}
+"#;
+
 pub const DEFAULT_POST_FRAG: &str = r#"#version 330 core
 in vec2 v_uv;
 uniform sampler2D u_scene_tex;
@@ -1313,40 +1332,52 @@ uniform float u_saturation;
 uniform float u_vignette;
 uniform float u_bloom_strength;
 uniform float u_bloom_threshold;
+uniform float u_chroma;
+uniform float u_time;
 uniform vec4 u_tint;
 
 out vec4 o_color;
 
 vec3 extract_bright(vec3 c, float thr) {
     float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-    return c * smoothstep(thr, thr + 0.25, l);
+    float mx = max(max(c.r, c.g), c.b);
+    float energy = max(l, mx * 0.92);
+    return c * smoothstep(thr, thr + 0.22, energy);
 }
 
 void main() {
-    vec3 col = texture(u_scene_tex, v_uv).rgb;
+    vec2 d = v_uv - 0.5;
+    vec3 col;
+    if (u_chroma > 0.0001) {
+        vec2 off = d * (u_chroma * 0.018);
+        col.r = texture(u_scene_tex, v_uv + off).r;
+        col.g = texture(u_scene_tex, v_uv).g;
+        col.b = texture(u_scene_tex, v_uv - off).b;
+    } else {
+        col = texture(u_scene_tex, v_uv).rgb;
+    }
 
-    // 9-tap soft bright-pass bloom halo (makes emissive lanterns/headlights glow cleanly)
+    // Two-ring soft bright-pass bloom halo
     if (u_bloom_strength > 0.001) {
-        vec2 texel = 2.5 / vec2(textureSize(u_scene_tex, 0));
+        vec2 texel = 1.0 / vec2(textureSize(u_scene_tex, 0));
         vec3 bloom = vec3(0.0);
         for (int y = -1; y <= 1; ++y) {
             for (int x = -1; x <= 1; ++x) {
-                vec3 s = texture(u_scene_tex, v_uv + vec2(x, y) * texel).rgb;
-                bloom += extract_bright(s, u_bloom_threshold);
+                vec2 o1 = vec2(x, y) * texel * 2.5;
+                vec2 o2 = vec2(x, y) * texel * 6.5;
+                bloom += extract_bright(texture(u_scene_tex, v_uv + o1).rgb, u_bloom_threshold) * 0.65;
+                bloom += extract_bright(texture(u_scene_tex, v_uv + o2).rgb, u_bloom_threshold) * 0.35;
             }
         }
         col += (bloom / 9.0) * u_bloom_strength;
     }
 
-    // Exposure, contrast, saturation & tint
     col *= u_exposure;
     col = (col - 0.5) * u_contrast + 0.5;
     float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
     col = mix(vec3(luma), col, u_saturation);
     col *= u_tint.rgb;
 
-    // Subtle radial vignette
-    vec2 d = v_uv - 0.5;
     float vig = 1.0 - dot(d, d) * (u_vignette * 2.2);
     col *= clamp(vig, 0.2, 1.0);
 
@@ -1472,6 +1503,10 @@ pub struct Gfx {
     bb_vbo: GLuint,
     bb_cap: usize,
 
+    sky_prog: GLuint,
+    u_sky_top: GLint,
+    u_sky_horizon: GLint,
+
     post_prog: GLuint,
     u_post_scene: GLint,
     u_post_exposure: GLint,
@@ -1480,6 +1515,8 @@ pub struct Gfx {
     u_post_vignette: GLint,
     u_post_bloom_str: GLint,
     u_post_bloom_thr: GLint,
+    u_post_chroma: GLint,
+    u_post_time: GLint,
     u_post_tint: GLint,
     post_vao: GLuint,
     scene_fbo: GLuint,
@@ -1504,6 +1541,7 @@ impl Gfx {
         let line_prog = compile_program(gl, LINE_VERT, LINE_FRAG)?;
         let ui_prog = compile_program(gl, UI_VERT, UI_FRAG)?;
         let bb_prog = compile_program(gl, BILLBOARD_VERT, BILLBOARD_FRAG)?;
+        let sky_prog = compile_program(gl, POST_VERT, SKY_FRAG)?;
         let post_prog = compile_program(gl, POST_VERT, DEFAULT_POST_FRAG)?;
 
         // 2048x2048 depth-only shadow map FBO
@@ -1654,6 +1692,9 @@ impl Gfx {
             bb_vao,
             bb_vbo,
             bb_cap: 0,
+            u_sky_top: uniform_loc(gl, sky_prog, "u_sky_top"),
+            u_sky_horizon: uniform_loc(gl, sky_prog, "u_sky_horizon"),
+            sky_prog,
             u_post_scene: uniform_loc(gl, post_prog, "u_scene_tex"),
             u_post_exposure: uniform_loc(gl, post_prog, "u_exposure"),
             u_post_contrast: uniform_loc(gl, post_prog, "u_contrast"),
@@ -1661,6 +1702,8 @@ impl Gfx {
             u_post_vignette: uniform_loc(gl, post_prog, "u_vignette"),
             u_post_bloom_str: uniform_loc(gl, post_prog, "u_bloom_strength"),
             u_post_bloom_thr: uniform_loc(gl, post_prog, "u_bloom_threshold"),
+            u_post_chroma: uniform_loc(gl, post_prog, "u_chroma"),
+            u_post_time: uniform_loc(gl, post_prog, "u_time"),
             u_post_tint: uniform_loc(gl, post_prog, "u_tint"),
             post_prog,
             post_vao,
@@ -1707,6 +1750,8 @@ impl Gfx {
         self.u_post_vignette = uniform_loc(gl, new_prog, "u_vignette");
         self.u_post_bloom_str = uniform_loc(gl, new_prog, "u_bloom_strength");
         self.u_post_bloom_thr = uniform_loc(gl, new_prog, "u_bloom_threshold");
+        self.u_post_chroma = uniform_loc(gl, new_prog, "u_chroma");
+        self.u_post_time = uniform_loc(gl, new_prog, "u_time");
         self.u_post_tint = uniform_loc(gl, new_prog, "u_tint");
         unsafe { (gl.glDeleteProgram)(old) };
         Ok(())
@@ -1903,6 +1948,21 @@ impl Gfx {
             (gl.glClearColor)(c.r, c.g, c.b, c.a);
             (gl.glClear)(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+            // Optional vertical sky gradient backdrop (drawn behind all 3D geometry)
+            if let Some((top, hor)) = draw.sky_gradient {
+                (gl.glDisable)(GL_DEPTH_TEST);
+                (gl.glDepthMask)(GL_FALSE);
+                (gl.glDisable)(GL_CULL_FACE);
+                (gl.glUseProgram)(self.sky_prog);
+                (gl.glUniform3f)(self.u_sky_top, top.r, top.g, top.b);
+                (gl.glUniform3f)(self.u_sky_horizon, hor.r, hor.g, hor.b);
+                (gl.glBindVertexArray)(self.post_vao);
+                (gl.glDrawArrays)(GL_TRIANGLES, 0, 3);
+                (gl.glEnable)(GL_DEPTH_TEST);
+                (gl.glDepthMask)(GL_TRUE);
+                (gl.glEnable)(GL_CULL_FACE);
+            }
+
             // Bind shadow map on texture unit 4 for both solid and PBR passes
             (gl.glActiveTexture)(GL_TEXTURE4);
             (gl.glBindTexture)(GL_TEXTURE_2D, self.shadow_tex);
@@ -2008,6 +2068,8 @@ impl Gfx {
                 (gl.glUniform1f)(self.u_post_vignette, p.vignette);
                 (gl.glUniform1f)(self.u_post_bloom_str, p.bloom_strength);
                 (gl.glUniform1f)(self.u_post_bloom_thr, p.bloom_threshold);
+                (gl.glUniform1f)(self.u_post_chroma, p.chroma);
+                (gl.glUniform1f)(self.u_post_time, p.time);
                 (gl.glUniform4f)(self.u_post_tint, p.tint.r, p.tint.g, p.tint.b, p.tint.a);
                 (gl.glBindVertexArray)(self.post_vao);
                 (gl.glDrawArrays)(GL_TRIANGLES, 0, 3);
@@ -2316,6 +2378,7 @@ impl Gfx {
             (gl.glDeleteProgram)(self.line_prog);
             (gl.glDeleteProgram)(self.ui_prog);
             (gl.glDeleteProgram)(self.bb_prog);
+            (gl.glDeleteProgram)(self.sky_prog);
             (gl.glDeleteProgram)(self.post_prog);
         }
     }

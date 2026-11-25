@@ -1,0 +1,4 @@
+sfx slide dur=0.28 sr=44100 ch=2 norm=-2
+osc saw 520 penv=520>110:0.20:exp env=0.003,0.20,0,0.05 g=0.55 | flt lp 1600 q=2.2
+noi white env=0.005,0.22,0,0.04 g=0.32 | flt bp 2400 q=1.1
+bus | flt hp 70

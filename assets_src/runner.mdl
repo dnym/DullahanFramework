@@ -1,0 +1,38 @@
+pal synthwave.pal
+# Hoverboard child node
+node board 0,0.16,0
+  box obsidian 0,0,0 0.56,0.08,1.55 a=c bev=0.03 wn=1
+  box neon_cyan 0,0.045,0 0.42,0.02,1.28 a=c
+  box neon_magenta -0.29,0,0 0.04,0.06,1.35 a=c
+  box neon_magenta 0.29,0,0 0.04,0.06,1.35 a=c
+  pyr hull_violet 0,0,-0.92 0.52,0.34,0.08 r=-90,0,0 a=c
+  cyl chrome -0.14,-0.02,0.80 0.06,0.08,0.16 r=90,0,0 seg=8 sm=1
+  cyl chrome 0.14,-0.02,0.80 0.06,0.08,0.16 r=90,0,0 seg=8 sm=1
+  cyl neon_cyan -0.14,-0.02,0.90 0.05,0.03,0.10 r=90,0,0 seg=8
+  cyl neon_cyan 0.14,-0.02,0.90 0.05,0.03,0.10 r=90,0,0 seg=8
+end
+# Articulated upper body + limbs (pivots at board deck Y=0.22)
+node body 0,0.22,0
+  # Legs (angled athletic surf stance)
+  box obsidian -0.15,0.34,0.14 0.18,0.68,0.20 a=c bev=0.03 r=8,0,4 wn=1
+  box obsidian 0.15,0.34,-0.14 0.18,0.68,0.20 a=c bev=0.03 r=-8,0,-4 wn=1
+  box neon_cyan -0.15,0.08,0.16 0.20,0.12,0.26 a=c bev=0.02
+  box neon_cyan 0.15,0.08,-0.16 0.20,0.12,0.26 a=c bev=0.02
+  # Torso cyber-jacket
+  box jacket_teal 0,0.96,0 0.50,0.62,0.30 a=c bev=0.05 wn=1
+  box jacket_pink 0,1.18,0 0.56,0.16,0.34 a=c bev=0.04 wn=1
+  # Back thruster pack + glowing spine strip (prominent from chase camera!)
+  box hull_slate 0,0.98,0.19 0.30,0.38,0.14 a=c bev=0.03 wn=1
+  box neon_magenta 0,0.98,0.27 0.08,0.30,0.04 a=c
+  cyl neon_cyan -0.09,0.78,0.21 0.045,0.03,0.12 a=c seg=8
+  cyl neon_cyan 0.09,0.78,0.21 0.045,0.03,0.12 a=c seg=8
+  # Arms held out for hover-balance
+  box jacket_teal -0.38,0.98,0.04 0.15,0.48,0.16 a=c bev=0.03 r=12,0,-28 wn=1
+  box jacket_teal 0.38,0.98,-0.04 0.15,0.48,0.16 a=c bev=0.03 r=-12,0,28 wn=1
+  box neon_magenta -0.49,0.78,0.08 0.12,0.10,0.14 a=c bev=0.02
+  box neon_magenta 0.49,0.78,-0.08 0.12,0.10,0.14 a=c bev=0.02
+  # Cyber helmet + glowing cyan wrap-around visor
+  box hull_violet 0,1.46,0 0.34,0.34,0.36 a=c bev=0.06 wn=1
+  box neon_cyan 0,1.47,-0.17 0.32,0.11,0.05 a=c
+  box neon_magenta 0,1.64,0.02 0.08,0.06,0.30 a=c
+end

@@ -1,0 +1,4 @@
+sfx coin dur=0.24 sr=44100 ch=2 norm=-2
+fm 987.77 mr=2.0 mi=1.8 md=0.06 penv=987.77>1480:0.06:lin env=0.002,0.18,0,0.04 g=0.75
+osc sin 1975.5 t=0.045 env=0.002,0.16,0,0.03 g=0.50
+bus | flt hp 220 | rev room=0.35 mix=0.18

@@ -1,0 +1,4 @@
+sfx jump dur=0.26 sr=44100 ch=2 norm=-2
+osc saw 180 penv=180>620:0.18:exp env=0.004,0.18,0,0.05 g=0.55 | flt lp 2200 q=1.4
+noi pink env=0.005,0.14,0,0.04 g=0.28 | flt bp 1400 q=0.9
+bus | flt hp 80

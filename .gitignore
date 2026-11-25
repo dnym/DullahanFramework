@@ -3,4 +3,5 @@
 *.snap
 *.png
 !assets/**/*.png
+!docs/**/*.png
 .DS_Store

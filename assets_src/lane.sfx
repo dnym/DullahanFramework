@@ -1,0 +1,4 @@
+sfx lane dur=0.12 sr=44100 ch=2 norm=-4
+noi pink env=0.005,0.09,0,0.02 g=0.55 | flt bp 1800 q=1.5
+osc tri 320 penv=280>440:0.09:exp env=0.003,0.08,0,0.02 g=0.35
+bus | flt hp 120

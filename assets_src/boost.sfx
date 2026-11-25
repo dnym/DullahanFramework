@@ -1,0 +1,5 @@
+sfx boost dur=0.55 sr=44100 ch=2 norm=-1
+ssaw 220 v=4 det=14 spr=0.8 penv=220>660:0.35:exp env=0.01,0.38,0.1,0.14 g=0.65 | flt lp 3200 q=1.2
+osc sin 110 penv=110>220:0.30:exp env=0.008,0.35,0,0.12 g=0.55
+noi pink env=0.01,0.40,0,0.10 g=0.28 | flt hp 1600
+bus | flt hp 40 | rev room=0.5 mix=0.22

@@ -1,0 +1,4 @@
+pal synthwave.pal
+ico neon_cyan 0,0,0 0.42 sub=0
+tor neon_magenta 0,0,0 0.62,0.06 seg=16 tseg=8 r=35,0,25
+tor neon_cyan 0,0,0 0.62,0.06 seg=16 tseg=8 r=-35,0,-25
