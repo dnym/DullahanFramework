@@ -1,14 +1,18 @@
+[workspace]
+members = [".", "demos/neon_rush"]
+resolver = "2"
+
 [package]
-name = "dullahan_framework"
+name = "dullahan"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 # Intentionally empty: zero external Cargo dependencies.
 
-[[bin]]
+[lib]
 name = "dullahan"
-path = "src/main.rs"
+path = "src/lib.rs"
 
 [[bin]]
 name = "dctl"

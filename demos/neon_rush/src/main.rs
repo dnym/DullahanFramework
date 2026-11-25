@@ -1,13 +1,24 @@
-mod dullahan;
 mod game;
 
 use dullahan::App;
+use dullahan::dev::AppConfig;
 use dullahan::gfx::DebugOverlay;
 use dullahan::platform::Key;
 use game::GameState;
+use std::path::PathBuf;
 
 fn main() {
-    let mut app = match App::from_args("NEON RUSH — Dullahan Framework", 1280, 720) {
+    let mut cfg = AppConfig::from_args("NEON RUSH — Dullahan Framework", 1280, 720);
+    // Resolve assets/ & data/ relative to CWD first, falling back to demos/neon_rush/ so
+    // `cargo run -p neon_rush` works seamlessly from the workspace root as well.
+    if !cfg.asset_root.exists() {
+        cfg.asset_root = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/assets"));
+    }
+    if !cfg.data_root.exists() {
+        cfg.data_root = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/data"));
+    }
+
+    let mut app = match App::new(cfg) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("[dullahan] init failed: {e}");

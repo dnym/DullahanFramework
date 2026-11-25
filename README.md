@@ -45,11 +45,11 @@ Included out of the box is **NEON RUSH**, a juiced-up Synthwave endless cyber-ru
 ## Quick Start (Linux)
 
 ```bash
-# Run unit tests (0 external crates)
-cargo test
+# Run framework unit tests (0 external crates)
+cargo test --workspace
 
-# Play NEON RUSH on desktop
-cargo run --bin dullahan
+# Play the NEON RUSH showcase demo (located cleanly in demos/neon_rush/)
+cargo run -p neon_rush
 
 # Live-tweak & inspect from another terminal while playing:
 cargo run --bin dctl -- state
@@ -59,7 +59,27 @@ cargo run --bin dctl -- overlay colliders
 cargo run --bin dctl -- screenshot /tmp/live.png
 
 # Headless deterministic render (works without X11 / DISPLAY):
-./target/debug/dullahan --headless --size 1280x720 --frames 15 --snap /tmp/title.png
+cargo run -p neon_rush -- --headless --size 1280x720 --frames 15 --snap /tmp/title.png
+```
+
+## Repository Layout
+
+```text
+DullahanFramework/
+├── Cargo.toml                     # Workspace root + zero-dep `dullahan` library & `dctl` CLI
+├── src/
+│   ├── lib.rs                     # Library entry point
+│   ├── dullahan/                  # Vendored framework core (copy directly into any game!)
+│   └── bin/dctl.rs                # Closed-loop runtime control CLI
+├── demos/
+│   └── neon_rush/                 # Self-contained Synthwave showcase project
+│       ├── Cargo.toml             # `dullahan = { path = "../.." }`
+│       ├── src/                   # Flat `game.rs` + `main.rs`
+│       ├── assets/                # .glb, .png, .svg, .wav, post.frag
+│       ├── assets_src/            # Plaintext Artisan .pal/.mdl/.sfx sources
+│       └── data/                  # runner.cfg live tuning
+├── skills/dullahan-framework/     # Companion generic LLM skill (SKILL.md)
+└── scripts/fast_restart.sh        # Tier 3 sub-second snapshot-preserving restart
 ```
 
 ## Documentation

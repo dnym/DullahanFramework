@@ -3,13 +3,13 @@
 //! Flat, data-oriented architecture: one `GameState`, plain `Vec`s / `Pool<T>`,
 //! linear `update()` -> `render()`, 100% live-tunable via `data/runner.cfg`.
 
-use crate::dullahan::App;
-use crate::dullahan::assets::{Assets, MeshHandle, SoundHandle, TexHandle};
-use crate::dullahan::audio::{AudioBus, PlayParams, VoiceId};
-use crate::dullahan::data::{DataStore, Snapshot};
-use crate::dullahan::gfx::{DrawList, PostSettings};
-use crate::dullahan::math::{Aabb, Color, Quat, Rng, Transform, Vec2, Vec3, clamp, lerp};
-use crate::dullahan::platform::{InputState, Key};
+use dullahan::App;
+use dullahan::assets::{Assets, MeshHandle, SoundHandle, TexHandle};
+use dullahan::audio::{AudioBus, PlayParams, VoiceId};
+use dullahan::data::{DataStore, Snapshot};
+use dullahan::gfx::{DrawList, PostSettings};
+use dullahan::math::{Aabb, Color, Quat, Rng, Transform, Vec2, Vec3, clamp, lerp};
+use dullahan::platform::{InputState, Key};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Phase {

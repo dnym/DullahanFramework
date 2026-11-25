@@ -59,8 +59,8 @@ impl App {
     pub fn new(config: AppConfig) -> Result<Self, String> {
         let platform = Platform::new(&config.title, config.width, config.height, config.headless)?;
         let mut gfx = Gfx::new(&platform.gl)?;
-        let assets = Assets::new(&platform.gl, "assets");
-        let data = DataStore::new("data");
+        let assets = Assets::new(&platform.gl, &config.asset_root);
+        let data = DataStore::new(&config.data_root);
         let audio = AudioEngine::new(config.headless);
         let dev = DevBridge::new(config.sock_path.clone(), config.script_path.as_deref());
 

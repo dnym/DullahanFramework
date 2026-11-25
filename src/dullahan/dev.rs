@@ -23,6 +23,8 @@ pub struct AppConfig {
     pub sock_path: Option<PathBuf>,
     pub script_path: Option<PathBuf>,
     pub restore_path: Option<PathBuf>,
+    pub asset_root: PathBuf,
+    pub data_root: PathBuf,
 }
 
 impl AppConfig {
@@ -38,6 +40,8 @@ impl AppConfig {
             sock_path: Some(PathBuf::from(DEFAULT_SOCK_PATH)),
             script_path: None,
             restore_path: None,
+            asset_root: PathBuf::from("assets"),
+            data_root: PathBuf::from("data"),
         };
 
         let mut args = std::env::args().skip(1);
