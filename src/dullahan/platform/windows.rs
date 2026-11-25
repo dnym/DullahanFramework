@@ -15,6 +15,10 @@ use crate::dullahan::platform::{
 };
 use std::ffi::{CString, c_char, c_int, c_long, c_short, c_uchar, c_uint, c_ulong, c_ushort, c_void};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static FOCUS_STATE: AtomicBool = AtomicBool::new(true);
 
 type HWND = *mut c_void;
 type HDC = *mut c_void;
@@ -204,9 +208,19 @@ unsafe extern "system" {
 }
 
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if msg == WM_CLOSE {
-        // Intercept WM_CLOSE so our message loop receives it cleanly as quit_requested
-        return 0;
+    match msg {
+        WM_CLOSE => {
+            // WM_CLOSE is sent directly to WndProc (not queued for PeekMessageA)
+            CLOSE_REQUESTED.store(true, Ordering::Relaxed);
+            return 0;
+        }
+        WM_SETFOCUS => {
+            FOCUS_STATE.store(true, Ordering::Relaxed);
+        }
+        WM_KILLFOCUS => {
+            FOCUS_STATE.store(false, Ordering::Relaxed);
+        }
+        _ => {}
     }
     unsafe { DefWindowProcA(hwnd, msg, wparam, lparam) }
 }
@@ -230,6 +244,8 @@ pub struct Platform {
 
 impl Platform {
     pub fn new(title: &str, width: u32, height: u32, headless: bool) -> Result<Self, String> {
+        CLOSE_REQUESTED.store(false, Ordering::Relaxed);
+        FOCUS_STATE.store(true, Ordering::Relaxed);
         unsafe {
             SetProcessDPIAware();
             let hinst = GetModuleHandleA(ptr::null());
@@ -425,6 +441,22 @@ impl Platform {
         self.last_mouse = Some(Vec2::new(cx as f32, cy as f32));
     }
 
+    fn update_cursor_clip(&self) {
+        if self.headless {
+            return;
+        }
+        unsafe {
+            let mut r = RECT::default();
+            GetClientRect(self.hwnd, &mut r);
+            let mut tl = POINT { x: r.left, y: r.top };
+            let mut br = POINT { x: r.right, y: r.bottom };
+            ClientToScreen(self.hwnd, &mut tl);
+            ClientToScreen(self.hwnd, &mut br);
+            let clip = RECT { left: tl.x, top: tl.y, right: br.x, bottom: br.y };
+            ClipCursor(&clip);
+        }
+    }
+
     pub fn set_cursor_locked(&mut self, locked: bool) {
         if self.headless || self.cursor_locked == locked {
             return;
@@ -433,14 +465,7 @@ impl Platform {
         unsafe {
             if locked {
                 while ShowCursor(0) >= 0 {}
-                let mut r = RECT::default();
-                GetClientRect(self.hwnd, &mut r);
-                let mut tl = POINT { x: r.left, y: r.top };
-                let mut br = POINT { x: r.right, y: r.bottom };
-                ClientToScreen(self.hwnd, &mut tl);
-                ClientToScreen(self.hwnd, &mut br);
-                let clip = RECT { left: tl.x, top: tl.y, right: br.x, bottom: br.y };
-                ClipCursor(&clip);
+                self.update_cursor_clip();
                 self.recenter_cursor();
                 self.ignore_warp = true;
             } else {
@@ -470,22 +495,6 @@ impl Platform {
             while PeekMessageA(&mut msg, self.hwnd, 0, 0, PM_REMOVE) != 0 {
                 match msg.message {
                     WM_CLOSE => input.quit_requested = true,
-                    WM_SIZE => {
-                        let w = (msg.lParam & 0xFFFF) as u32;
-                        let h = ((msg.lParam >> 16) & 0xFFFF) as u32;
-                        if w > 0 && h > 0 {
-                            self.width = w;
-                            self.height = h;
-                        }
-                    }
-                    WM_SETFOCUS => input.focused = true,
-                    WM_KILLFOCUS => {
-                        input.focused = false;
-                        input.clear_all();
-                        if self.cursor_locked {
-                            self.set_cursor_locked(false);
-                        }
-                    }
                     WM_KEYDOWN | WM_SYSKEYDOWN => {
                         if let Some(k) = vk_to_key(msg.wParam, msg.lParam) {
                             input.set_key(k, true);
@@ -542,7 +551,37 @@ impl Platform {
                 TranslateMessage(&msg);
                 DispatchMessageA(&msg);
             }
+
+            // Sync live client size (handles Maximize, Snap, drag-resize, and DPI changes reliably)
+            let mut rect = RECT::default();
+            if GetClientRect(self.hwnd, &mut rect) != 0 {
+                let rw = (rect.right - rect.left).max(0) as u32;
+                let rh = (rect.bottom - rect.top).max(0) as u32;
+                if rw > 0 && rh > 0 && (rw != self.width || rh != self.height) {
+                    self.width = rw;
+                    self.height = rh;
+                    if self.cursor_locked {
+                        self.update_cursor_clip();
+                        need_recenter = true;
+                    }
+                }
+            }
         }
+
+        if CLOSE_REQUESTED.swap(false, Ordering::Relaxed) {
+            input.quit_requested = true;
+        }
+        let focused = FOCUS_STATE.load(Ordering::Relaxed);
+        if focused != input.focused {
+            input.focused = focused;
+            if !focused {
+                input.clear_all();
+                if self.cursor_locked {
+                    self.set_cursor_locked(false);
+                }
+            }
+        }
+
         if need_recenter && self.cursor_locked && input.focused {
             self.recenter_cursor();
         }
