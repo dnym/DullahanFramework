@@ -1,0 +1,25 @@
+pal temple.pal
+sdf ecto_green res=26 sm=1
+  # Bulbous alien cranium + tapering ghostly mantle
+  ell 0,1.25,0 0.64,0.56,0.58
+  cap 0,1.15,0 0,0.35,0 0.56,0.22 k=0.22
+  # Three wiggly ghostly tail tentacles
+  cap -0.28,0.45,0.10 -0.44,0.05,0.22 0.18,0.06 k=0.16
+  cap 0.28,0.45,0.10 0.44,0.05,0.22 0.18,0.06 k=0.16
+  cap 0,0.42,-0.15 0,0.02,-0.32 0.20,0.07 k=0.16
+  # Little stubby alien wavey arms
+  cap -0.48,0.92,0 -0.82,0.82,-0.25 0.16,0.09 k=0.14
+  cap 0.48,0.92,0 0.82,0.82,-0.25 0.16,0.09 k=0.14
+end
+# Three goofy glowing alien eyes (faces +Z!)
+ico alien_eye -0.22,1.26,0.48 0.13 sub=1 sm=1
+ico alien_eye 0.22,1.26,0.48 0.13 sub=1 sm=1
+ico alien_eye 0.0,1.48,0.54 0.11 sub=1 sm=1
+ico obsidian -0.22,1.26,0.58 0.055 sub=1
+ico obsidian 0.22,1.26,0.58 0.055 sub=1
+ico obsidian 0.0,1.48,0.63 0.048 sub=1
+# Twin alien antennae with glowing pink orbs
+cyl jade_back -0.24,1.72,0 0.03,0.02,0.38 r=0,0,18 a=b seg=8
+cyl jade_back 0.24,1.72,0 0.03,0.02,0.38 r=0,0,-18 a=b seg=8
+ico ecto_pink -0.36,2.08,0 0.10 sub=1 sm=1
+ico ecto_pink 0.36,2.08,0 0.10 sub=1 sm=1

@@ -1,0 +1,4 @@
+sfx tile_err dur=0.26 sr=44100 ch=2 norm=-3
+osc sqr 210 env=0.003,0.09,0,0.02 g=0.45 | flt lp 900
+osc sqr 165 t=0.11 env=0.003,0.12,0,0.02 g=0.50 | flt lp 850
+bus | flt hp 60

@@ -1,0 +1,4 @@
+sfx tile_select dur=0.22 sr=44100 ch=2 norm=-2
+noi white env=0.001,0.018,0,0.008 g=0.85 | flt bp 2400 q=2.6
+osc tri 1174.66 env=0.002,0.16,0,0.04 g=0.52
+bus | flt hp 140 | rev room=0.35 mix=0.18

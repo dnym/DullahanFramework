@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "demos/neon_rush"]
+members = [".", "demos/neon_rush", "demos/mahjong_wars"]
 resolver = "2"
 
 [package]

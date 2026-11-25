@@ -29,7 +29,7 @@ Dullahan is a **vendored, zero-dependency, flat Rust game framework**. The game 
 
 | Need | Module / API |
 | :--- | :--- |
-| App loop & CLI | `App::from_args(title, w, h)` (`--headless`, `--size WxH`, `--frames N`, `--dt S`, `--snap out.png`, `--sock path`, `--script file`, `--restore file.snap`) |
+| App loop & Input | `App::from_args(title, w, h)` (`--headless`, `--size WxH`, `--frames N`, `--dt S`, `--snap out.png`, `--sock path`, `--script file`, `--restore file.snap`), `app.set_cursor_locked(bool)` / `app.is_cursor_locked()` (FPS mouse capture) |
 | Assets (Tier 1 hot-reload) | `app.load_mesh("x.glb")`, `app.load_texture("x.png", true)`, `app.load_svg("icon.svg", 64, 64)`, `app.load_sound("x.wav")`, `app.create_terrain_mesh(&hf, tex, 64, 64)` |
 | 3D PBR & Lighting | `draw.camera`, `draw.sun_dir`, `draw.shadows_enabled`, `draw.point_light(pos, col, rad, int)`, `draw.mesh(h, tr)`, `draw.mesh_nodes(h, tr, &[(node_idx, local_tr)])`, `draw.billboard(tex, pos, size, col)` |
 | Post-Processing | `draw.post` (`enabled`, `exposure`, `contrast`, `saturation`, `vignette`, `bloom_strength`, `bloom_threshold`, `tint`) + hot-reloadable `assets/shaders/post.frag` & `pbr.vert/.frag` |

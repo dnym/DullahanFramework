@@ -7,6 +7,13 @@ name = "dullahan"
 version = "0.1.0"
 
 [[package]]
+name = "mahjong_wars"
+version = "0.1.0"
+dependencies = [
+ "dullahan",
+]
+
+[[package]]
 name = "neon_rush"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,4 @@
+sfx player_hit dur=0.35 sr=44100 ch=2 norm=-1
+osc sin 110 penv=130>38:0.22:exp env=0.002,0.26,0,0.06 g=0.85 | drv 0.45
+noi brown env=0.002,0.22,0,0.06 g=0.65 | flt lp 1600
+bus | flt hp 35

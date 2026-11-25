@@ -172,6 +172,14 @@ impl App {
         self.platform.height
     }
 
+    pub fn set_cursor_locked(&mut self, locked: bool) {
+        self.platform.set_cursor_locked(locked);
+    }
+
+    pub fn is_cursor_locked(&self) -> bool {
+        self.platform.is_cursor_locked()
+    }
+
     pub fn begin_frame(&mut self) -> bool {
         if !self.running || self.input.quit_requested {
             return false;

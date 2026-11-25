@@ -1,0 +1,13 @@
+pal temple.pal
+box slate_stone 0,0,0 1.45,0.45,1.45 a=b bev=0.06 wn=1
+box dark_bronze 0,0.45,0 1.10,0.30,1.10 a=b bev=0.04 wn=1
+cyl crimson 0,0.75,0 0.42,0.38,5.4 a=b seg=12 sm=1
+cyl gold 0,1.15,0 0.46,0.46,0.16 a=b seg=12
+cyl gold 0,5.65,0 0.46,0.46,0.16 a=b seg=12
+box crimson 0,6.15,0 1.65,0.42,1.65 a=b bev=0.06 wn=1
+box dark_bronze 0,5.20,0.65 0.14,0.14,1.15 a=c
+# Hanging glowing paper lantern (+Z)
+cyl gold 0,4.88,1.12 0.22,0.22,0.10 a=c seg=10
+cyl lantern_warm 0,4.45,1.12 0.34,0.34,0.72 a=c seg=12 bev=0.08 sm=1
+cyl gold 0,4.02,1.12 0.22,0.22,0.10 a=c seg=10
+cyl crimson 0,3.78,1.12 0.06,0.03,0.36 a=c seg=8

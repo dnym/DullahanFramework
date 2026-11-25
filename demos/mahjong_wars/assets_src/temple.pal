@@ -1,0 +1,17 @@
+grid 4x4@16
+ivory         #F5EDD8 0.42 0.04
+jade_back     #1D6E53 0.34 0.12
+jade_glow     #38F5A8 0.18 0.08 #1CE08C
+crimson       #B22228 0.46 0.12
+gold          #F0BE3C 0.24 0.85 #A87610
+slate_stone   #363C4B 0.82 0.08
+dark_bronze   #3C332B 0.45 0.72
+gunmetal      #252C38 0.36 0.78
+gun_silver    #9EACC0 0.22 0.90
+laser_cyan    #44FAFF 0.12 0.05 #1CEEFF
+lantern_warm  #FFDC7A 0.18 0.00 #FFAA36
+ecto_green    #48FF84 0.25 0.05 #1CE05E
+ecto_pink     #FF48B4 0.25 0.05 #E01C92
+alien_eye     #FFF868 0.10 0.00 #FFE422
+obsidian      #121521 0.55 0.35
+ecto_mist     #50FFA088 0.18 0.05 #22D86C

@@ -272,6 +272,23 @@ struct X11Fns {
     XNextEvent: unsafe extern "C" fn(*mut XDisplay, *mut XEvent) -> c_int,
     XLookupKeysym: unsafe extern "C" fn(*mut XKeyEvent, c_int) -> c_ulong,
     XFree: unsafe extern "C" fn(*mut c_void) -> c_int,
+    XWarpPointer: unsafe extern "C" fn(*mut XDisplay, XWindow, XWindow, c_int, c_int, c_uint, c_uint, c_int, c_int) -> c_int,
+    XCreatePixmap: unsafe extern "C" fn(*mut XDisplay, XWindow, c_uint, c_uint, c_uint) -> c_ulong,
+    XFreePixmap: unsafe extern "C" fn(*mut XDisplay, c_ulong) -> c_int,
+    XCreatePixmapCursor: unsafe extern "C" fn(*mut XDisplay, c_ulong, c_ulong, *mut XColor, *mut XColor, c_uint, c_uint) -> c_ulong,
+    XDefineCursor: unsafe extern "C" fn(*mut XDisplay, XWindow, c_ulong) -> c_int,
+    XUndefineCursor: unsafe extern "C" fn(*mut XDisplay, XWindow) -> c_int,
+    XFreeCursor: unsafe extern "C" fn(*mut XDisplay, c_ulong) -> c_int,
+}
+
+#[repr(C)]
+struct XColor {
+    pixel: c_ulong,
+    red: u16,
+    green: u16,
+    blue: u16,
+    flags: c_char,
+    pad: c_char,
 }
 
 #[allow(non_snake_case)]
@@ -346,6 +363,8 @@ enum Backend {
         context: GLXContext,
         wm_delete_window: XAtom,
         last_mouse: Option<Vec2>,
+        cursor_locked: bool,
+        blank_cursor: c_ulong,
     },
     HeadlessEgl {
         _lib_egl: DynLib,
@@ -400,6 +419,13 @@ impl Platform {
                 XNextEvent: lib_x11.sym("XNextEvent")?,
                 XLookupKeysym: lib_x11.sym("XLookupKeysym")?,
                 XFree: lib_x11.sym("XFree")?,
+                XWarpPointer: lib_x11.sym("XWarpPointer")?,
+                XCreatePixmap: lib_x11.sym("XCreatePixmap")?,
+                XFreePixmap: lib_x11.sym("XFreePixmap")?,
+                XCreatePixmapCursor: lib_x11.sym("XCreatePixmapCursor")?,
+                XDefineCursor: lib_x11.sym("XDefineCursor")?,
+                XUndefineCursor: lib_x11.sym("XUndefineCursor")?,
+                XFreeCursor: lib_x11.sym("XFreeCursor")?,
             }
         };
 
@@ -521,6 +547,15 @@ impl Platform {
             if !p.is_null() { p } else { lib_gl.sym_raw(name) }
         })?;
 
+        // Create a 1x1 invisible cursor for FPS mouse-look locking
+        let blank_cursor = unsafe {
+            let pm = (x11.XCreatePixmap)(display, window, 1, 1, 1);
+            let mut black: XColor = std::mem::zeroed();
+            let cur = (x11.XCreatePixmapCursor)(display, pm, pm, &mut black, &mut black, 0, 0);
+            (x11.XFreePixmap)(display, pm);
+            cur
+        };
+
         Ok(Self {
             backend: Backend::X11 {
                 _lib_x11: lib_x11,
@@ -533,6 +568,8 @@ impl Platform {
                 context,
                 wm_delete_window,
                 last_mouse: None,
+                cursor_locked: false,
+                blank_cursor,
             },
             gl,
             width,
@@ -719,17 +756,64 @@ impl Platform {
         }
     }
 
-    pub fn poll_events(&mut self, input: &mut InputState) {
+    /// Locks and hides the cursor at window center for smooth 360-degree FPS mouse look.
+    pub fn set_cursor_locked(&mut self, locked: bool) {
         let Backend::X11 {
             x11,
             display,
-            wm_delete_window,
+            window,
             last_mouse,
+            cursor_locked,
+            blank_cursor,
             ..
         } = &mut self.backend
         else {
             return;
         };
+        if *cursor_locked == locked {
+            return;
+        }
+        *cursor_locked = locked;
+        unsafe {
+            if locked {
+                (x11.XDefineCursor)(*display, *window, *blank_cursor);
+                let cx = (self.width / 2) as c_int;
+                let cy = (self.height / 2) as c_int;
+                (x11.XWarpPointer)(*display, 0, *window, 0, 0, 0, 0, cx, cy);
+                (x11.XFlush)(*display);
+                *last_mouse = Some(Vec2::new(cx as f32, cy as f32));
+            } else {
+                (x11.XUndefineCursor)(*display, *window);
+                (x11.XFlush)(*display);
+                *last_mouse = None;
+            }
+        }
+    }
+
+    pub fn is_cursor_locked(&self) -> bool {
+        match &self.backend {
+            Backend::X11 { cursor_locked, .. } => *cursor_locked,
+            Backend::HeadlessEgl { .. } => false,
+        }
+    }
+
+    pub fn poll_events(&mut self, input: &mut InputState) {
+        let Backend::X11 {
+            x11,
+            display,
+            window,
+            wm_delete_window,
+            last_mouse,
+            cursor_locked,
+            ..
+        } = &mut self.backend
+        else {
+            return;
+        };
+
+        let cx = (self.width / 2) as c_int;
+        let cy = (self.height / 2) as c_int;
+        let mut need_recenter = false;
 
         unsafe {
             while (x11.XPending)(*display) > 0 {
@@ -772,11 +856,21 @@ impl Platform {
                     }
                     MOTION_NOTIFY => {
                         let pos = Vec2::new(ev.xmotion.x as f32, ev.xmotion.y as f32);
-                        if let Some(prev) = *last_mouse {
-                            input.mouse_delta = input.mouse_delta + (pos - prev);
+                        if *cursor_locked {
+                            let dx = ev.xmotion.x - cx;
+                            let dy = ev.xmotion.y - cy;
+                            if dx != 0 || dy != 0 {
+                                input.mouse_delta = input.mouse_delta + Vec2::new(dx as f32, dy as f32);
+                                need_recenter = true;
+                            }
+                            input.mouse_pos = Vec2::new(cx as f32, cy as f32);
+                        } else {
+                            if let Some(prev) = *last_mouse {
+                                input.mouse_delta = input.mouse_delta + (pos - prev);
+                            }
+                            *last_mouse = Some(pos);
+                            input.mouse_pos = pos;
                         }
-                        *last_mouse = Some(pos);
-                        input.mouse_pos = pos;
                     }
                     CONFIGURE_NOTIFY => {
                         let w = ev.xconfigure.width.max(1) as u32;
@@ -796,6 +890,10 @@ impl Platform {
                     }
                     _ => {}
                 }
+            }
+            if need_recenter && *cursor_locked && input.focused {
+                (x11.XWarpPointer)(*display, 0, *window, 0, 0, 0, 0, cx, cy);
+                (x11.XFlush)(*display);
             }
         }
     }
@@ -822,10 +920,12 @@ impl Drop for Platform {
                 window,
                 colormap,
                 context,
+                blank_cursor,
                 ..
             } => unsafe {
                 (glx.glXMakeCurrent)(*display, 0, ptr::null_mut());
                 (glx.glXDestroyContext)(*display, *context);
+                (x11.XFreeCursor)(*display, *blank_cursor);
                 (x11.XDestroyWindow)(*display, *window);
                 (x11.XFreeColormap)(*display, *colormap);
                 (x11.XCloseDisplay)(*display);

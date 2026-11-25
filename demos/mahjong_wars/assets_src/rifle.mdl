@@ -1,0 +1,20 @@
+pal temple.pal
+# Main receiver body
+box gunmetal 0,0,0 0.14,0.18,0.68 a=c bev=0.025 wn=1
+# Crimson lacquer & gold side plates (deadpan bureaucratic chic!)
+box crimson -0.072,0.02,-0.02 0.02,0.09,0.44 a=c bev=0.008
+box crimson 0.072,0.02,-0.02 0.02,0.09,0.44 a=c bev=0.008
+box gold 0,0.095,-0.06 0.07,0.025,0.48 a=c bev=0.006
+# Barrel shroud + glowing cyan plasma cooling coils
+cyl gun_silver 0,0.02,-0.52 0.042,0.036,0.46 r=90,0,0 seg=12 sm=1
+cyl laser_cyan -0.046,0.02,-0.46 0.016,0.016,0.34 r=90,0,0 seg=8 sm=1
+cyl laser_cyan 0.046,0.02,-0.46 0.016,0.016,0.34 r=90,0,0 seg=8 sm=1
+cyl laser_cyan 0,0.02,-0.75 0.028,0.028,0.05 r=90,0,0 seg=10
+# Glowing jade energy cell magazine underneath
+box obsidian 0,-0.14,-0.08 0.08,0.16,0.16 r=14,0,0 a=c bev=0.015
+box jade_glow 0,-0.14,-0.08 0.092,0.08,0.06 r=14,0,0 a=c
+# Holo-sight frame on top rail
+box gunmetal -0.045,0.14,0.08 0.018,0.075,0.06 a=c
+box gunmetal 0.045,0.14,0.08 0.018,0.075,0.06 a=c
+box gunmetal 0,0.175,0.08 0.11,0.018,0.06 a=c
+box laser_cyan 0,0.14,0.08 0.012,0.012,0.012 a=c

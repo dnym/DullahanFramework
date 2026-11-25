@@ -1,0 +1,5 @@
+sfx ghost_pop dur=0.42 sr=44100 ch=2 norm=-1
+osc sin 240 penv=220>880:0.12:exp env=0.003,0.18,0,0.05 g=0.65
+fm 880 t=0.06 mr=2.5 mi=2.4 md=0.12 penv=980>340:0.24:exp env=0.004,0.28,0,0.06 g=0.60
+noi pink t=0.04 env=0.002,0.16,0,0.05 g=0.55 | flt bp 1900 q=1.2
+bus | flt hp 60 | rev room=0.50 mix=0.24

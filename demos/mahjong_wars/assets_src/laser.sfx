@@ -1,0 +1,5 @@
+sfx laser dur=0.18 sr=44100 ch=2 norm=-2
+osc saw 1420 penv=1580>210:0.13:exp env=0.002,0.12,0,0.03 g=0.68 | flt lp 3800 q=1.8
+osc sin 420 penv=420>90:0.09:exp env=0.002,0.09,0,0.02 g=0.45
+noi white env=0.001,0.035,0,0.01 g=0.32 | flt hp 2200
+bus | flt hp 90

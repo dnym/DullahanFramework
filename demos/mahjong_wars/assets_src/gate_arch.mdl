@@ -1,0 +1,10 @@
+pal temple.pal
+cyl crimson -5.2,0,0 0.46,0.42,6.6 a=b seg=12 sm=1
+cyl crimson 5.2,0,0 0.46,0.42,6.6 a=b seg=12 sm=1
+box slate_stone -5.2,0,0 1.4,0.5,1.4 a=b bev=0.06
+box slate_stone 5.2,0,0 1.4,0.5,1.4 a=b bev=0.06
+box crimson 0,5.8,0 11.8,0.65,0.85 a=c bev=0.05 wn=1
+box gold 0,6.35,0 12.6,0.36,1.35 a=c bev=0.05 wn=1
+box dark_bronze 0,6.95,0 13.8,0.55,2.2 t=0.78,0.55 a=c bev=0.08 wn=1
+box gold 0,7.32,0 11.0,0.18,0.30 a=c
+box jade_glow 0,5.8,0.45 4.4,0.44,0.08 a=c

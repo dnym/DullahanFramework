@@ -1,0 +1,33 @@
+sfx temple_war bpm=116 bars=4 bpb=4 sr=44100 ch=2 loop=1 xfade=0.03 curve=lin norm=-3 seed=88
+
+def taiko
+  osc sin 68 penv=125>52:0.12:exp env=0.004,0.34,0,0.06 g=0.92 | drv 0.18
+  noi brown env=0.003,0.16,0,0.04 g=0.35 | flt lp 650
+end
+
+def woodblock
+  osc tri 780 penv=860>740:0.02:exp env=0.001,0.055,0,0.015 g=0.52 | flt bp 920 q=2.4
+end
+
+def guzheng
+  plk 293.66 damp=0.994 br=0.72 env=0.002,0.55,0.12,0.18 g=0.65 | flt lp 4200
+end
+
+def erhu
+  osc saw 587.33 lfo=pitch:5.2:0.012 env=0.08,0.25,0.62,0.14 g=0.34 | flt bp 1500 q=1.4 | flt lp 3200
+end
+
+def drone
+  osc tri 73.42 env=0.1,0.6,0.5,0.2 g=0.32 | flt lp 480
+end
+
+pat taiko     "X..x..X.X...x..." step=0.25 rep=4 g=0.88 | rev room=0.55 mix=0.22
+pat woodblock "..x...x...x.x..." step=0.25 rep=4 g=0.45 pan=0.25
+
+seq drone "D2:4 A1:4 B1:4 A1:4" gate=0.95 g=0.68
+
+seq guzheng "D4:.5 F#4:.5 A4:.5 D5:.5 B4:.5 A4:.5 F#4:.5 E4:.5 A3:.5 D4:.5 E4:.5 A4:.5 F#4:.5 E4:.5 D4:.5 A3:.5 B3:.5 D4:.5 F#4:.5 B4:.5 A4:.5 F#4:.5 E4:.5 D4:.5 A3:.5 E4:.5 F#4:.5 A4:.5 D5:1 A4:1" gate=0.92 g=0.72 | dly b=0.75 mix=0.24 fb=0.28 damp=3200 pp=1 | rev room=0.68 mix=0.28
+
+seq erhu "A4:1.5 B4:.5 D5:1 A4:1 F#4:1.5 E4:.5 D4:2 E4:1 F#4:1 A4:1 B4:1 D5:1.5 B4:.5 A4:2" gate=0.88 g=0.54 pan=-0.15 | rev room=0.72 mix=0.32
+
+bus | flt hp 34 | cmp thr=-10 rat=2.8 atk=0.01 rel=0.14 | wid 1.15
