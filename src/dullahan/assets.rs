@@ -8,8 +8,8 @@ use crate::dullahan::formats::png;
 use crate::dullahan::formats::svg;
 use crate::dullahan::formats::wav::{self, AudioClip};
 use crate::dullahan::geom::HeightField;
-use crate::dullahan::gfx::{self, GpuMaterial, GpuMesh, GpuTexture};
-use crate::dullahan::math::Aabb;
+use crate::dullahan::gfx::{self, GpuInstances, GpuMaterial, GpuMesh, GpuTexture};
+use crate::dullahan::math::{Aabb, Mat4};
 use crate::dullahan::platform::GlFns;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,6 +24,10 @@ pub struct MeshHandle(pub u32);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SoundHandle(pub u32);
+
+/// Handle to a static GPU buffer of per-instance transforms (see `Assets::create_instances`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct InstanceHandle(pub u32);
 
 #[derive(Copy, Clone, Debug, Default)]
 pub struct ReloadReport {
@@ -67,6 +71,8 @@ pub struct Assets {
     textures: Vec<TexEntry>,
     meshes: Vec<MeshEntry>,
     sounds: Vec<SoundEntry>,
+    /// Instance buffers; `None` marks a freed slot that `create_instances` reuses.
+    instance_sets: Vec<Option<GpuInstances>>,
     pbr_shader_watch: ShaderWatch,
     post_frag_path: PathBuf,
     post_frag_mtime: Option<SystemTime>,
@@ -109,6 +115,7 @@ impl Assets {
             textures,
             meshes: Vec::new(),
             sounds: Vec::new(),
+            instance_sets: Vec::new(),
             pbr_shader_watch,
             post_frag_path,
             post_frag_mtime,
@@ -511,6 +518,37 @@ impl Assets {
             .unwrap_or(&self.textures[self.checker_tex.0 as usize].gpu)
     }
 
+    /// Uploads per-instance transforms once; draw them with `DrawList::mesh_instances`.
+    pub fn create_instances(&mut self, gl: &GlFns, transforms: &[Mat4]) -> InstanceHandle {
+        let gpu = gfx::upload_instances(gl, transforms);
+        if let Some(i) = self.instance_sets.iter().position(Option::is_none) {
+            self.instance_sets[i] = Some(gpu);
+            return InstanceHandle(i as u32);
+        }
+        self.instance_sets.push(Some(gpu));
+        InstanceHandle(self.instance_sets.len() as u32 - 1)
+    }
+
+    /// Replaces the transforms of an existing instance buffer.
+    pub fn update_instances(&mut self, gl: &GlFns, handle: InstanceHandle, transforms: &[Mat4]) {
+        if let Some(Some(inst)) = self.instance_sets.get_mut(handle.0 as usize) {
+            gfx::write_instances(gl, inst, transforms);
+        }
+    }
+
+    /// Frees an instance buffer. Drawing a destroyed handle is a no-op.
+    pub fn destroy_instances(&mut self, gl: &GlFns, handle: InstanceHandle) {
+        if let Some(slot) = self.instance_sets.get_mut(handle.0 as usize) {
+            if let Some(inst) = slot.take() {
+                gfx::destroy_instances(gl, &inst);
+            }
+        }
+    }
+
+    pub fn instances(&self, handle: InstanceHandle) -> Option<&GpuInstances> {
+        self.instance_sets.get(handle.0 as usize).and_then(Option::as_ref)
+    }
+
     pub fn mesh(&self, handle: MeshHandle) -> Option<&GpuMesh> {
         self.meshes.get(handle.0 as usize).map(|e| &e.gpu)
     }
@@ -540,6 +578,9 @@ impl Assets {
     }
 
     pub fn destroy(&self, gl: &GlFns) {
+        for inst in self.instance_sets.iter().flatten() {
+            gfx::destroy_instances(gl, inst);
+        }
         for m in &self.meshes {
             gfx::destroy_mesh(gl, &m.gpu);
         }

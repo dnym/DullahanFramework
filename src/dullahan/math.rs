@@ -785,6 +785,67 @@ impl Aabb {
     }
 }
 
+impl Aabb {
+    /// Grows the box to contain `p`.
+    #[inline]
+    pub fn include(&mut self, p: Vec3) {
+        self.min = Vec3::new(self.min.x.min(p.x), self.min.y.min(p.y), self.min.z.min(p.z));
+        self.max = Vec3::new(self.max.x.max(p.x), self.max.y.max(p.y), self.max.z.max(p.z));
+    }
+
+    /// World-space box enclosing this box after transforming its 8 corners by `m`.
+    pub fn transformed(self, m: Mat4) -> Self {
+        let c = m.transform_point(self.min);
+        let mut out = Aabb::new(c, c);
+        for i in 1..8 {
+            let p = Vec3::new(
+                if i & 1 != 0 { self.max.x } else { self.min.x },
+                if i & 2 != 0 { self.max.y } else { self.min.y },
+                if i & 4 != 0 { self.max.z } else { self.min.z },
+            );
+            out.include(m.transform_point(p));
+        }
+        out
+    }
+}
+
+/// View frustum as 6 inward-facing planes `(a, b, c, d)` with `a*x + b*y + c*z + d >= 0` inside.
+/// Extracted from a column-major OpenGL view-projection matrix (Gribb & Hartmann).
+#[derive(Copy, Clone, Debug)]
+pub struct Frustum {
+    pub planes: [Vec4; 6],
+}
+
+impl Frustum {
+    pub fn from_view_proj(vp: Mat4) -> Self {
+        let m = &vp.m;
+        let row = |i: usize| Vec4::new(m[i], m[4 + i], m[8 + i], m[12 + i]);
+        let (r0, r1, r2, r3) = (row(0), row(1), row(2), row(3));
+        let add = |a: Vec4, b: Vec4| Vec4::new(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w);
+        let sub = |a: Vec4, b: Vec4| Vec4::new(a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w);
+        let mut planes = [add(r3, r0), sub(r3, r0), add(r3, r1), sub(r3, r1), add(r3, r2), sub(r3, r2)];
+        for p in &mut planes {
+            let len = (p.x * p.x + p.y * p.y + p.z * p.z).sqrt().max(1e-12);
+            *p = Vec4::new(p.x / len, p.y / len, p.z / len, p.w / len);
+        }
+        Self { planes }
+    }
+
+    /// Conservative test: `false` only if the box is entirely outside one plane.
+    pub fn intersects_aabb(&self, b: Aabb) -> bool {
+        for p in &self.planes {
+            // Corner of the box furthest along the plane normal.
+            let x = if p.x >= 0.0 { b.max.x } else { b.min.x };
+            let y = if p.y >= 0.0 { b.max.y } else { b.min.y };
+            let z = if p.z >= 0.0 { b.max.z } else { b.min.z };
+            if p.x * x + p.y * y + p.z * z + p.w < 0.0 {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Ray {
     pub origin: Vec3,
@@ -836,6 +897,21 @@ impl Ray {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frustum_culls_boxes_outside_view() {
+        let vp = Mat4::perspective(60f32.to_radians(), 1.0, 0.1, 100.0)
+            * Mat4::look_at(Vec3::ZERO, Vec3::new(0.0, 0.0, -1.0), Vec3::Y);
+        let f = Frustum::from_view_proj(vp);
+        let unit = |c: Vec3| Aabb::from_center_half(c, Vec3::new(0.5, 0.5, 0.5));
+        assert!(f.intersects_aabb(unit(Vec3::new(0.0, 0.0, -10.0))), "in front");
+        assert!(!f.intersects_aabb(unit(Vec3::new(0.0, 0.0, 10.0))), "behind");
+        assert!(!f.intersects_aabb(unit(Vec3::new(50.0, 0.0, -10.0))), "far right");
+        assert!(!f.intersects_aabb(unit(Vec3::new(0.0, 0.0, -200.0))), "beyond far plane");
+        assert!(f.intersects_aabb(Aabb::new(Vec3::new(-100.0, -1.0, -20.0), Vec3::new(100.0, 1.0, -5.0))), "straddling");
+        let moved = unit(Vec3::ZERO).transformed(Mat4::translation(Vec3::new(3.0, 0.0, 0.0)));
+        assert!((moved.center() - Vec3::new(3.0, 0.0, 0.0)).len() < 1e-6);
+    }
 
     #[test]
     fn vec3_cross_and_quat_rotate() {
