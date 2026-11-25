@@ -1,0 +1,15 @@
+[package]
+name = "dullahan_framework"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Intentionally empty: zero external Cargo dependencies.
+
+[[bin]]
+name = "dullahan"
+path = "src/main.rs"
+
+[[bin]]
+name = "dctl"
+path = "src/bin/dctl.rs"

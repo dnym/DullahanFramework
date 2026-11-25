@@ -1,0 +1,5 @@
+# Declarative spatial layout (Tier 2 hot-reload)
+prop  beacon  0.0 0.0  0.0   spin=1
+prop  beacon -3.2 0.0 -2.0   yaw=30
+prop  beacon  3.2 0.0 -2.0   yaw=-30
+light lantern 0.0 2.55 0.0   color=#FFB84D radius=9.0 intensity=2.2
