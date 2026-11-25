@@ -8,7 +8,7 @@ A **zero-dependency, flat, hot-reloadable, LLM-first Rust game framework** (Linu
 
 ## Showcase Demos
 
-All showcase games live in self-contained subfolders under `demos/` and depend solely on `dullahan = { path = "../.." }` (**0 external crates**).
+All showcase games live in self-contained subfolders under `demos/` and depend solely on `dullahan = { path = "../.." }` (**0 external crates**). All 3D models, shared PBR palettes, procedural music, sound effects, and SVG assets across these demos were created with **[Dullahan Artisan](https://github.com/jayzone80/DullahanArtisan)** (loaded directly at runtime as standard `.glb`, `.png`, `.wav`, and `.svg` files).
 
 ### 1. NEON RUSH (Synthwave Cyber-Runner)
 
@@ -54,7 +54,7 @@ A warm, sunlit 6-hole 2D mini golf stroll showcasing Dullahan's pure-2D pipeline
 
 - **Zero Cargo dependencies:** Pure Rust + minimal `extern "C"` Linux OS FFI (`libX11`, `libGL`, `libEGL`, `libasound`). Clean builds in **~1.1s**, incremental rebuilds in **~0.25s**, zero crate API drift.
 - **Flat, explicit, non-constraining:** The game owns `fn main()`, the loop, and one flat `GameState` backed by plain `Vec`s or generational `Pool<T>` arenas. No forced ECS, OOP scene graph, or monolithic physics engine.
-- **Standard formats only:** Pure-Rust loaders for `.glb`/`.gltf` (PBR + named child nodes + `col` colliders), `.png` (8-bit & 16-bit heightmaps + PNG encoder), `.svg` (4×4 AA rasterizer), `.wav`, and `.glsl`. Works with Dullahan Artisan or any external assets.
+- **Standard formats only:** Pure-Rust loaders for `.glb`/`.gltf` (PBR + named child nodes + `col` colliders), `.png` (8-bit & 16-bit heightmaps + PNG encoder), `.svg` (4×4 AA rasterizer), `.wav`, and `.glsl`. Pairs naturally with [Dullahan Artisan](https://github.com/jayzone80/DullahanArtisan) or any external asset pipeline.
 - **Git-friendly data & 3-tier live iteration:**
   1. **Assets & shaders** (`.glb`, `.png`, `.svg`, `.wav`, `pbr.vert/.frag`, `post.frag`) hot-reload live in-place with safe error fallbacks.
   2. **Tuning, tables & levels** (`data/*.cfg`, `.tbl`, `.lvl`) hot-reload live with 1-line Git diffs.
