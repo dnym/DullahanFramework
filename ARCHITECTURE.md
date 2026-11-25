@@ -124,6 +124,7 @@ Every loader is pure Rust, panic-free on malformed input, and returns clear `fil
   - `alphaMode`: `OPAQUE`, `MASK` (with `alphaCutoff`), `BLEND` (sorted transparent pass), and `doubleSided`
   - External texture deduplication: multiple `.glb` files referencing the same external `.png` texture share a single GPU texture handle and batch cleanly.
 - **Named Node Hierarchy:** Every glTF node preserves its name, parent index, and rest TRS (`translation`, `rotation`, `scale`). Games can query `mesh.node_id("turret_yaw")` and pass per-draw local overrides to animate wheels, doors, weapons, or limbs without needing a skeletal animation engine on day one.
+- **Background Loading & Unloading:** `load_mesh_async` returns a stable handle at once while 1-4 `std::thread` workers read and parse the file (CPU only). `App::begin_frame` uploads finished models on the main thread within `App::upload_budget_ms` (default 2 ms, at least one mesh per frame), so streaming worlds never stall on disk or parsing. Until then `assets.mesh(h)` is `None` and draws are skipped. `unload_mesh` frees GPU buffers and embedded textures and recycles the slot; a per-slot generation discards results for meshes unloaded mid-load.
 - **Collider Convention:** Nodes named `col`, `col_*`, `*_col`, or `*-colonly` are extracted into `Mesh::colliders` (local AABBs / convex vertex clouds / triangle soups) and excluded from visual rendering.
 
 ### 4.2 PNG (`.png`)
