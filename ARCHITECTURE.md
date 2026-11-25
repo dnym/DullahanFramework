@@ -151,6 +151,8 @@ No scene graph, no retained entity handles inside the renderer. Each frame, the 
 2. **Opaque PBR Pass:**
    - Standard metallic-roughness PBR + hemisphere ambient + 1 directional sun + up to 8 dynamic point lights + linear/exp distance fog.
    - Draw calls sorted by `(shader, material/texture, mesh)` so shared-palette models automatically minimize state switches.
+   - **Instancing:** `draw.mesh_instances(mesh, instances, transform, tint)` draws a static GPU buffer of per-instance `Mat4`s (`app.create_instances`) with one `glDrawElementsInstanced` per primitive, in both the shadow and main pass (default shaders compiled a second time with `#define INSTANCED`; custom `pbr.vert` overrides need the same `#ifdef INSTANCED` block). For forests, crowds, debris.
+   - **Frustum culling:** with `draw.frustum_culling` (default on), mesh draws and instance batches whose bounds are outside the camera frustum skip the main pass, and those outside the light frustum skip the shadow pass. Draws with node overrides are never culled. `FrameStats::culled` / `instances` report it.
    - Supports per-draw `Transform`, optional `node_overrides` slice, and color tint/emissive boost (great for hit-flash!).
 3. **Terrain Pass (optional helper):**
    - Renders either a regular `.glb` terrain mesh *or* a heightmap + 4-channel RGBA splatmap + normal map terrain using the exact same PBR lighting model.
