@@ -555,7 +555,7 @@ pub fn write_instances(gl: &GlFns, inst: &mut GpuInstances, transforms: &[Mat4])
         (gl.glBindBuffer)(GL_ARRAY_BUFFER, inst.vbo);
         (gl.glBufferData)(
             GL_ARRAY_BUFFER,
-            (transforms.len() * std::mem::size_of::<Mat4>()) as GLsizeiptr,
+            std::mem::size_of_val(transforms) as GLsizeiptr,
             transforms.as_ptr() as *const c_void,
             GL_STATIC_DRAW,
         );
@@ -2661,6 +2661,7 @@ impl Gfx {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn draw_pbr_prim(
         &self,
         gl: &GlFns,

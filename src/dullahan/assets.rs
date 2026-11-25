@@ -538,10 +538,8 @@ impl Assets {
 
     /// Frees an instance buffer. Drawing a destroyed handle is a no-op.
     pub fn destroy_instances(&mut self, gl: &GlFns, handle: InstanceHandle) {
-        if let Some(slot) = self.instance_sets.get_mut(handle.0 as usize) {
-            if let Some(inst) = slot.take() {
-                gfx::destroy_instances(gl, &inst);
-            }
+        if let Some(inst) = self.instance_sets.get_mut(handle.0 as usize).and_then(Option::take) {
+            gfx::destroy_instances(gl, &inst);
         }
     }
 
