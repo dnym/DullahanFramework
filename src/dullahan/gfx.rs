@@ -580,6 +580,8 @@ struct UiQuadCmd {
 struct BillboardCmd {
     tex: Option<TexHandle>,
     pos: Vec3,
+    /// `None` = camera-facing billboard; `Some((right_dir, up_dir))` = fixed world-oriented 3D quad/decal.
+    axes: Option<(Vec3, Vec3)>,
     size: Vec2,
     color: Color,
 }
@@ -666,7 +668,35 @@ impl DrawList {
 
     /// Camera-facing 3D billboard quad (particles, dust puffs, sparks, floating markers).
     pub fn billboard(&mut self, tex: Option<TexHandle>, pos: Vec3, size: Vec2, color: Color) {
-        self.billboards.push(BillboardCmd { tex, pos, size, color });
+        self.billboards.push(BillboardCmd { tex, pos, axes: None, size, color });
+    }
+
+    /// World-oriented 3D textured quad (surface decals, wall posters, painted tile emblems).
+    /// `right_dir` points along +U and `up_dir` points along -V (top of the texture).
+    pub fn quad_3d(
+        &mut self,
+        tex: Option<TexHandle>,
+        pos: Vec3,
+        right_dir: Vec3,
+        up_dir: Vec3,
+        size: Vec2,
+        color: Color,
+    ) {
+        self.billboards.push(BillboardCmd {
+            tex,
+            pos,
+            axes: Some((right_dir.norm(), up_dir.norm())),
+            size,
+            color,
+        });
+    }
+
+    /// Flat horizontal 3D decal painted on the XZ plane facing +Y (great for floor/tile emblems).
+    pub fn decal_flat(&mut self, tex: Option<TexHandle>, pos: Vec3, size: Vec2, yaw: f32, color: Color) {
+        let (s, c) = yaw.sin_cos();
+        let right_dir = Vec3::new(c, 0.0, -s);
+        let up_dir = Vec3::new(-s, 0.0, -c);
+        self.quad_3d(tex, pos, right_dir, up_dir, size, color);
     }
 
     pub fn point_light(&mut self, pos: Vec3, color: Color, radius: f32, intensity: f32) {
@@ -809,6 +839,65 @@ impl DrawList {
         if fw > 0.5 {
             self.ui_rect(x, y, fw, h, fill);
         }
+    }
+
+    /// Interactive horizontal slider (click or drag). Mutates `value` within `[min, max]` and returns `true` if changed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ui_slider(
+        &mut self,
+        input: &InputState,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        min: f32,
+        max: f32,
+        value: &mut f32,
+    ) -> bool {
+        let span = (max - min).max(1e-5);
+        let m = input.mouse_pos;
+        let pad = 6.0;
+        let hovered = m.x >= x - pad && m.x <= x + w + pad && m.y >= y - pad && m.y <= y + h + pad;
+        let active = hovered && input.mouse_down(MouseButton::Left);
+        let mut changed = false;
+        if active {
+            let frac = clamp((m.x - x) / w.max(1.0), 0.0, 1.0);
+            let next = min + frac * span;
+            if (next - *value).abs() > 1e-4 {
+                *value = next;
+                changed = true;
+            }
+        }
+        let frac = clamp((*value - min) / span, 0.0, 1.0);
+        let track_h = (h * 0.42).max(6.0);
+        let track_y = y + (h - track_h) * 0.5;
+        let border = if hovered || active {
+            Color::rgba(0.58, 0.85, 0.96, 0.95)
+        } else {
+            Color::rgba(0.32, 0.40, 0.50, 0.90)
+        };
+        let fill = if active {
+            Color::from_hex(0x44FAFF)
+        } else {
+            Color::from_hex(0x38F5A8)
+        };
+        self.ui_panel(x, track_y, w, track_h, Color::rgba(0.08, 0.10, 0.15, 0.92), border, 1.5);
+        let fw = (w - 4.0).max(0.0) * frac;
+        if fw > 0.5 {
+            self.ui_rect(x + 2.0, track_y + 2.0, fw, (track_h - 4.0).max(2.0), fill);
+        }
+        let knob_w = 12.0;
+        let knob_x = x + frac * w - knob_w * 0.5;
+        self.ui_panel(
+            knob_x,
+            y,
+            knob_w,
+            h,
+            if active { Color::WHITE } else { Color::from_hex(0xF0BE3C) },
+            Color::rgba(0.06, 0.07, 0.11, 0.95),
+            1.5,
+        );
+        changed
     }
 
     pub fn ui_sprite(&mut self, tex: TexHandle, x: f32, y: f32, w: f32, h: f32, tint: Color) {
@@ -2114,8 +2203,9 @@ impl Gfx {
                 .tex
                 .map(|h| assets.texture(h).id)
                 .unwrap_or_else(|| assets.texture(assets.white_tex).id);
-            let rx = right * (b.size.x * 0.5);
-            let uy = up * (b.size.y * 0.5);
+            let (r_dir, u_dir) = b.axes.unwrap_or((right, up));
+            let rx = r_dir * (b.size.x * 0.5);
+            let uy = u_dir * (b.size.y * 0.5);
             let p0 = (b.pos - rx + uy).to_array();
             let p1 = (b.pos - rx - uy).to_array();
             let p2 = (b.pos + rx - uy).to_array();

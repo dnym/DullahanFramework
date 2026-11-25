@@ -153,14 +153,14 @@ impl GameAssets {
     pub fn load(app: &mut App) -> Self {
         app.data.load_config("mahjong.cfg");
         let tile_icons = [
-            app.load_svg("ui/tile_0.svg", 96, 96),
-            app.load_svg("ui/tile_1.svg", 96, 96),
-            app.load_svg("ui/tile_2.svg", 96, 96),
-            app.load_svg("ui/tile_3.svg", 96, 96),
-            app.load_svg("ui/tile_4.svg", 96, 96),
-            app.load_svg("ui/tile_5.svg", 96, 96),
-            app.load_svg("ui/tile_6.svg", 96, 96),
-            app.load_svg("ui/tile_7.svg", 96, 96),
+            app.load_svg("ui/tile_0.svg", 128, 128),
+            app.load_svg("ui/tile_1.svg", 128, 128),
+            app.load_svg("ui/tile_2.svg", 128, 128),
+            app.load_svg("ui/tile_3.svg", 128, 128),
+            app.load_svg("ui/tile_4.svg", 128, 128),
+            app.load_svg("ui/tile_5.svg", 128, 128),
+            app.load_svg("ui/tile_6.svg", 128, 128),
+            app.load_svg("ui/tile_7.svg", 128, 128),
         ];
         Self {
             tile: app.load_mesh("models/tile.glb"),
@@ -188,16 +188,36 @@ impl GameAssets {
 
 pub struct GameState {
     pub phase: Phase,
+    pub paused: bool,
+    pub quit_requested: bool,
     pub assets: GameAssets,
     music_voice: Option<VoiceId>,
-    muted: bool,
 
-    // FPS Player State
+    // Live Settings (adjustable in Pause Menu)
+    pub muted: bool,
+    pub master_volume: f32,
+    pub mouse_sens_mult: f32,
+    pub fov_deg: f32,
+    pub invert_y: bool,
+
+    // FPS Player & Parkour State
     pub pos: Vec3,
     pub vel: Vec3,
     pub yaw: f32,
     pub pitch: f32,
     pub grounded: bool,
+    pub sliding: bool,
+    slide_timer: f32,
+    slide_grace: f32,
+    slide_cd: f32,
+    slide_spark_cd: f32,
+    slide_dir: Vec3,
+    coyote_timer: f32,
+    jump_buffer: f32,
+    eye_height_cur: f32,
+    cam_roll: f32,
+    fov_kick: f32,
+    vault_flash: f32,
     pub hp: f32,
     pub max_hp: f32,
     walk_bob: f32,
@@ -241,14 +261,32 @@ impl GameState {
 
         let mut s = Self {
             phase: Phase::Title,
+            paused: false,
+            quit_requested: false,
             assets,
             music_voice,
             muted: false,
+            master_volume: 0.85,
+            mouse_sens_mult: 0.75,
+            fov_deg: 72.0,
+            invert_y: false,
             pos: Vec3::new(0.0, 0.0, 14.5),
             vel: Vec3::ZERO,
             yaw: 0.0,
             pitch: -0.14,
             grounded: true,
+            sliding: false,
+            slide_timer: 0.0,
+            slide_grace: 0.0,
+            slide_cd: 0.0,
+            slide_spark_cd: 0.0,
+            slide_dir: Vec3::new(0.0, 0.0, -1.0),
+            coyote_timer: 0.0,
+            jump_buffer: 0.0,
+            eye_height_cur: 1.75,
+            cam_roll: 0.0,
+            fov_kick: 0.0,
+            vault_flash: 0.0,
             hp: 100.0,
             max_hp: 100.0,
             walk_bob: 0.0,
@@ -288,10 +326,21 @@ impl GameState {
 
     pub fn start_run(&mut self) {
         self.phase = Phase::Playing;
+        self.paused = false;
         self.pos = Vec3::new(0.0, 0.0, 12.2);
         self.vel = Vec3::ZERO;
         self.yaw = 0.0;
         self.pitch = -0.12;
+        self.sliding = false;
+        self.slide_timer = 0.0;
+        self.slide_grace = 0.0;
+        self.slide_cd = 0.0;
+        self.coyote_timer = 0.0;
+        self.jump_buffer = 0.0;
+        self.eye_height_cur = 1.75;
+        self.cam_roll = 0.0;
+        self.fov_kick = 0.0;
+        self.vault_flash = 0.0;
         self.hp = self.max_hp;
         self.fire_cd = 0.0;
         self.recoil = 0.0;
@@ -426,10 +475,27 @@ impl GameState {
         is_slot_free(&self.tiles, &removed_flags, idx)
     }
 
-    fn eye_pos(&self, data: &DataStore) -> Vec3 {
-        let eh = data.config("mahjong.cfg").map(|c| c.f32("player.eye_height", 1.75)).unwrap_or(1.75);
-        let bob_y = (self.walk_bob * 9.0).sin() * 0.055;
-        Vec3::new(self.pos.x, self.pos.y + eh + bob_y, self.pos.z)
+    fn eye_pos(&self, _data: &DataStore) -> Vec3 {
+        let bob_amp = if self.sliding { 0.0 } else { 0.055 };
+        let bob_y = (self.walk_bob * 9.0).sin() * bob_amp;
+        Vec3::new(self.pos.x, self.pos.y + self.eye_height_cur + bob_y, self.pos.z)
+    }
+
+    pub fn trigger_slide(&mut self, data: &DataStore) {
+        let slide_spd = data.config("mahjong.cfg").map(|c| c.f32("player.slide_speed", 16.8)).unwrap_or(16.8);
+        let fwd_xz = Vec3::new(-self.yaw.sin(), 0.0, -self.yaw.cos()).norm();
+        let horiz = Vec3::new(self.vel.x, 0.0, self.vel.z);
+        let dir = if horiz.len_sq() > 1.0 { horiz.norm() } else { fwd_xz };
+        self.sliding = true;
+        self.slide_timer = 0.65;
+        self.slide_grace = 0.18;
+        self.slide_cd = 0.35;
+        self.slide_dir = dir;
+        let boost = horiz.len().max(slide_spd);
+        self.vel.x = dir.x * boost;
+        self.vel.z = dir.z * boost;
+        self.fov_kick = (self.fov_kick + 9.5).min(12.0);
+        self.queue_sfx(self.assets.sfx_select, 0.38, 0.62, 0.0);
     }
 
     fn look_basis(&self) -> (Vec3, Vec3, Vec3) {
@@ -758,30 +824,44 @@ impl GameState {
             app.play_sound(ev.sound, ev.params);
         }
         if let Some(vid) = self.music_voice {
-            let g = match self.phase {
-                Phase::Playing => 0.36,
-                Phase::Title => 0.24,
-                Phase::Victory | Phase::Defeat => 0.16,
+            let g = if self.paused {
+                0.14
+            } else {
+                match self.phase {
+                    Phase::Playing => 0.36,
+                    Phase::Title => 0.24,
+                    Phase::Victory | Phase::Defeat => 0.16,
+                }
             };
             app.audio.set_voice(vid, g, 1.0, 0.0);
         }
+        app.audio.set_bus_gain(AudioBus::Sfx, self.master_volume);
+        app.audio.set_bus_gain(AudioBus::Music, self.master_volume * 0.85);
         app.audio.set_muted(self.muted);
     }
 
     pub fn update(&mut self, input: &InputState, data: &DataStore, dt: f32) {
+        if input.key_pressed(Key::M) {
+            self.muted = !self.muted;
+        }
+        if self.paused {
+            return;
+        }
+
         let cfg = data.config("mahjong.cfg");
-        let move_spd = cfg.map(|c| c.f32("player.move_speed", 9.2)).unwrap_or(9.2);
-        let jump_vel = cfg.map(|c| c.f32("player.jump_vel", 10.5)).unwrap_or(10.5);
+        let move_spd = cfg.map(|c| c.f32("player.move_speed", 9.6)).unwrap_or(9.6);
+        let jump_vel = cfg.map(|c| c.f32("player.jump_vel", 10.8)).unwrap_or(10.8);
         let gravity = cfg.map(|c| c.f32("player.gravity", 28.0)).unwrap_or(28.0);
-        let mouse_sens = cfg.map(|c| c.f32("player.mouse_sens", 0.0024)).unwrap_or(0.0024);
+        let stand_eye = cfg.map(|c| c.f32("player.eye_height", 1.75)).unwrap_or(1.75);
+        let slide_spd = cfg.map(|c| c.f32("player.slide_speed", 16.8)).unwrap_or(16.8);
+        let slide_jump_boost = cfg.map(|c| c.f32("player.slide_jump_boost", 1.24)).unwrap_or(1.24);
+        let slide_fric = cfg.map(|c| c.f32("player.slide_friction", 1.65)).unwrap_or(1.65);
+        let base_sens = cfg.map(|c| c.f32("player.mouse_sens", 0.0018)).unwrap_or(0.0018);
+        let mouse_sens = base_sens * self.mouse_sens_mult;
         let spawn_rate = cfg.map(|c| c.f32("ghost.spawn_rate", 4.6)).unwrap_or(4.6);
         let max_ghosts = cfg.map(|c| c.i32("ghost.max_active", 7)).unwrap_or(7) as usize;
         let scout_spd = cfg.map(|c| c.f32("ghost.scout_speed", 4.4)).unwrap_or(4.4);
         let warden_spd = cfg.map(|c| c.f32("ghost.warden_speed", 3.1)).unwrap_or(3.1);
-
-        if input.key_pressed(Key::M) {
-            self.muted = !self.muted;
-        }
 
         // Decay timers & FX
         self.fire_cd = (self.fire_cd - dt).max(0.0);
@@ -790,6 +870,12 @@ impl GameState {
         self.hitmarker_timer = (self.hitmarker_timer - dt).max(0.0);
         self.shake_trauma = (self.shake_trauma - dt * 1.8).max(0.0);
         self.flash_timer = (self.flash_timer - dt).max(0.0);
+        self.slide_cd = (self.slide_cd - dt).max(0.0);
+        self.slide_grace = (self.slide_grace - dt).max(0.0);
+        self.slide_spark_cd = (self.slide_spark_cd - dt).max(0.0);
+        self.vault_flash = (self.vault_flash - dt).max(0.0);
+        self.coyote_timer = (self.coyote_timer - dt).max(0.0);
+        self.jump_buffer = (self.jump_buffer - dt).max(0.0);
         if self.radio_timer > 0.0 {
             self.radio_timer -= dt;
         }
@@ -814,10 +900,11 @@ impl GameState {
 
         match self.phase {
             Phase::Title => {
-                // Slow majestic orbital preview around the temple Mahjong pyramid
+                // Slow majestic orbital preview around the temple Mahjong pyramid (higher vantage so painted faces show!)
                 self.yaw += 0.16 * dt;
-                self.pos = Vec3::new(self.yaw.sin() * 14.5, 2.2, self.yaw.cos() * 14.5);
-                self.pitch = -0.22;
+                self.pos = Vec3::new(self.yaw.sin() * 14.2, 4.6, self.yaw.cos() * 14.2);
+                self.eye_height_cur = stand_eye;
+                self.pitch = -0.44;
                 for g in &mut self.ghosts {
                     g.bob_phase += dt * 3.0;
                 }
@@ -835,9 +922,10 @@ impl GameState {
             Phase::Playing => {}
         }
 
-        // --- FPS Look (mouse delta + arrow keys fallback) ---
+        // --- FPS Look (fixed 1:1 mouse delta + Invert Y + arrow keys fallback) ---
+        let y_sign = if self.invert_y { 1.0 } else { -1.0 };
         self.yaw -= input.mouse_delta.x * mouse_sens;
-        self.pitch = clamp(self.pitch - input.mouse_delta.y * mouse_sens, -1.25, 1.25);
+        self.pitch = clamp(self.pitch + input.mouse_delta.y * mouse_sens * y_sign, -1.32, 1.32);
         if input.key_down(Key::Left) {
             self.yaw += 2.2 * dt;
         }
@@ -845,33 +933,143 @@ impl GameState {
             self.yaw -= 2.2 * dt;
         }
         if input.key_down(Key::Up) {
-            self.pitch = clamp(self.pitch + 1.5 * dt, -1.25, 1.25);
+            self.pitch = clamp(self.pitch + 1.5 * dt, -1.32, 1.32);
         }
         if input.key_down(Key::Down) {
-            self.pitch = clamp(self.pitch - 1.5 * dt, -1.25, 1.25);
+            self.pitch = clamp(self.pitch - 1.5 * dt, -1.32, 1.32);
         }
 
-        // --- FPS Movement + Jumping + Walkable Tile Collision ---
+        // --- Parkour Movement: Sprint-Slide, Slide-Jump Vault & Walkable Tile Mantle ---
         let fwd_xz = Vec3::new(-self.yaw.sin(), 0.0, -self.yaw.cos()).norm();
         let right_xz = Vec3::new(self.yaw.cos(), 0.0, -self.yaw.sin()).norm();
         let mut wish = Vec3::ZERO;
+        let mut strafe_in = 0.0f32;
         if input.key_down(Key::W) { wish += fwd_xz; }
         if input.key_down(Key::S) { wish -= fwd_xz; }
-        if input.key_down(Key::D) { wish += right_xz; }
-        if input.key_down(Key::A) { wish -= right_xz; }
+        if input.key_down(Key::D) { wish += right_xz; strafe_in += 1.0; }
+        if input.key_down(Key::A) { wish -= right_xz; strafe_in -= 1.0; }
         if wish.len_sq() > 1e-4 {
             wish = wish.norm();
-            if self.grounded {
+            if self.grounded && !self.sliding {
                 self.walk_bob += dt;
             }
         }
 
-        self.vel.x = lerp(self.vel.x, wish.x * move_spd, (12.0 * dt).min(1.0));
-        self.vel.z = lerp(self.vel.z, wish.z * move_spd, (12.0 * dt).min(1.0));
-        if self.grounded && input.key_pressed(Key::Space) {
-            self.vel.y = jump_vel;
-            self.grounded = false;
+        let slide_held = input.key_down(Key::LShift)
+            || input.key_down(Key::RShift)
+            || input.key_down(Key::C)
+            || input.key_down(Key::LCtrl);
+        let slide_pressed = input.key_pressed(Key::LShift)
+            || input.key_pressed(Key::RShift)
+            || input.key_pressed(Key::C)
+            || input.key_pressed(Key::LCtrl);
+
+        if input.key_pressed(Key::Space) {
+            self.jump_buffer = 0.14;
         }
+        if self.grounded {
+            self.coyote_timer = 0.13;
+        }
+
+        // Start a high-speed parkour slide when pressing Shift/C/Ctrl while moving (or landing into a slide!)
+        let horiz_speed = (self.vel.x * self.vel.x + self.vel.z * self.vel.z).sqrt();
+        if !self.sliding && self.grounded && self.slide_cd <= 0.0 && (slide_pressed || (slide_held && horiz_speed > move_spd * 0.72)) {
+            let dir = if wish.len_sq() > 1e-4 {
+                wish
+            } else if horiz_speed > 1.5 {
+                Vec3::new(self.vel.x, 0.0, self.vel.z).norm()
+            } else {
+                fwd_xz
+            };
+            self.sliding = true;
+            self.slide_timer = 0.72;
+            self.slide_grace = 0.20;
+            self.slide_cd = 0.35;
+            self.slide_dir = dir;
+            let boost = horiz_speed.max(slide_spd);
+            self.vel.x = dir.x * boost;
+            self.vel.z = dir.z * boost;
+            self.fov_kick = (self.fov_kick + 9.0).min(12.0);
+            self.queue_sfx(self.assets.sfx_select, 0.38, 0.62, 0.0);
+        }
+
+        if self.sliding {
+            self.slide_timer -= dt;
+            self.slide_grace = 0.18;
+            // Subtle steering while gliding across the glossy Mahjong tiles
+            let steer = wish * 10.0 * dt;
+            self.vel.x += steer.x;
+            self.vel.z += steer.z;
+            let drag = (1.0 - slide_fric * dt).max(0.0);
+            self.vel.x *= drag;
+            self.vel.z *= drag;
+
+            // Sparkling jade friction sparks beneath the sliding agent!
+            if self.grounded && self.slide_spark_cd <= 0.0 {
+                self.slide_spark_cd = 0.055;
+                self.fx.push(FxBillboard {
+                    tex: self.assets.muzzle_tex,
+                    pos: self.pos + Vec3::new(self.rng.range(-0.35, 0.35), 0.18, self.rng.range(-0.35, 0.35)),
+                    vel: Vec3::new(-self.vel.x * 0.25, self.rng.range(1.2, 2.8), -self.vel.z * 0.25),
+                    size_start: 0.34,
+                    size_end: 0.05,
+                    life: 0.22,
+                    max_life: 0.22,
+                    color: Color::from_hex(0x38F5A8),
+                });
+            }
+
+            let cur_hspd = (self.vel.x * self.vel.x + self.vel.z * self.vel.z).sqrt();
+            if self.slide_timer <= 0.0 || (!slide_held && self.slide_timer < 0.45) || cur_hspd < 4.5 {
+                self.sliding = false;
+            }
+        } else {
+            let accel = if self.grounded { 12.5 } else { 4.2 };
+            let target_x = wish.x * move_spd;
+            let target_z = wish.z * move_spd;
+            // Preserve extra parkour air momentum when moving forward after a slide-jump!
+            if !self.grounded && horiz_speed > move_spd && wish.len_sq() > 1e-4 {
+                self.vel.x = lerp(self.vel.x, wish.x * horiz_speed, (3.2 * dt).min(1.0));
+                self.vel.z = lerp(self.vel.z, wish.z * horiz_speed, (3.2 * dt).min(1.0));
+            } else {
+                self.vel.x = lerp(self.vel.x, target_x, (accel * dt).min(1.0));
+                self.vel.z = lerp(self.vel.z, target_z, (accel * dt).min(1.0));
+            }
+        }
+
+        // Jump & Slide-Jump Vault!
+        if self.jump_buffer > 0.0 && self.coyote_timer > 0.0 {
+            let was_slide = self.sliding || self.slide_grace > 0.0;
+            self.sliding = false;
+            self.coyote_timer = 0.0;
+            self.jump_buffer = 0.0;
+            self.grounded = false;
+            if was_slide {
+                self.vel.y = jump_vel * slide_jump_boost;
+                let dir = if wish.len_sq() > 1e-4 { wish } else { self.slide_dir };
+                let launch_spd = (horiz_speed + 2.4).min(slide_spd * 1.15);
+                self.vel.x = dir.x * launch_spd;
+                self.vel.z = dir.z * launch_spd;
+                self.fov_kick = (self.fov_kick + 7.0).min(14.0);
+                self.vault_flash = 0.55;
+                self.queue_sfx(self.assets.sfx_select, 0.46, 1.32, 0.0);
+            } else {
+                self.vel.y = jump_vel;
+            }
+        }
+
+        // Smooth camera duck, parkour roll & FOV speed kick
+        let target_eye = if self.sliding { 0.86 } else { stand_eye };
+        self.eye_height_cur = lerp(self.eye_height_cur, target_eye, (14.0 * dt).min(1.0));
+        let target_roll = if self.sliding {
+            if strafe_in.abs() > 0.1 { -strafe_in * 0.085 } else { -0.055 }
+        } else {
+            -strafe_in * 0.025
+        };
+        self.cam_roll = lerp(self.cam_roll, target_roll, (10.0 * dt).min(1.0));
+        let target_fov_kick = if self.sliding { 8.5 } else if !self.grounded && horiz_speed > move_spd * 1.15 { 5.0 } else { 0.0 };
+        self.fov_kick = lerp(self.fov_kick, target_fov_kick, (7.5 * dt).min(1.0));
+
         self.vel.y -= gravity * dt;
         self.pos += self.vel * dt;
 
@@ -879,27 +1077,33 @@ impl GameState {
         self.pos.x = clamp(self.pos.x, -16.5, 16.5);
         self.pos.z = clamp(self.pos.z, -15.5, 16.5);
 
-        // Floor + walkable Mahjong tile AABB pushout (allows climbing onto tiles!)
+        // Floor + walkable Mahjong tile AABB pushout with smooth Parkour Auto-Vault!
+        let was_grounded = self.grounded;
         self.grounded = false;
         if self.pos.y <= 0.0 {
             self.pos.y = 0.0;
             self.vel.y = 0.0;
             self.grounded = true;
         }
+        let body_h = if self.sliding { 1.05 } else { 1.75 };
         for t in &self.tiles {
             if t.removed {
                 continue;
             }
             let pbox = Aabb::new(
                 Vec3::new(self.pos.x - 0.42, self.pos.y, self.pos.z - 0.42),
-                Vec3::new(self.pos.x + 0.42, self.pos.y + 1.75, self.pos.z + 0.42),
+                Vec3::new(self.pos.x + 0.42, self.pos.y + body_h, self.pos.z + 0.42),
             );
             let tb = t.aabb();
             if let Some(push) = aabb_pushout(pbox, tb) {
-                // Smooth step-up onto low tiles if feet are near the top edge!
-                if push.y == 0.0 && tb.max.y - self.pos.y <= 0.45 && self.vel.y <= 0.5 {
+                // Parkour tile-edge mantle / smooth step-up (easily climb & slide over Mahjong tiers!)
+                let step_delta = tb.max.y - self.pos.y;
+                let max_step = if self.sliding || !was_grounded { 0.90 } else { 0.62 };
+                if push.y == 0.0 && step_delta > 0.0 && step_delta <= max_step && self.vel.y >= -4.5 {
                     self.pos.y = tb.max.y;
-                    self.vel.y = 0.0;
+                    if self.vel.y < 0.0 {
+                        self.vel.y = 0.0;
+                    }
                     self.grounded = true;
                 } else {
                     self.pos += push;
@@ -1054,8 +1258,8 @@ impl GameState {
 
         draw.camera.pos = eye + shake_off;
         draw.camera.target = eye + fwd * 12.0 + shake_off * 0.4;
-        draw.camera.up = Vec3::Y;
-        draw.camera.fov_deg = 66.0;
+        draw.camera.up = (Vec3::Y + right * self.cam_roll).norm();
+        draw.camera.fov_deg = clamp(self.fov_deg + self.fov_kick, 55.0, 112.0);
         draw.camera.near = 0.08;
         draw.camera.far = 220.0;
 
@@ -1141,20 +1345,22 @@ impl GameState {
                 tint,
             );
 
-            // Crisp floating SVG Mahjong emblem billboard right above the tile face!
-            let icon_alpha = if is_free { 1.0 } else { 0.36 };
-            let icon_scale = if is_selected {
-                1.14 + (elapsed * 7.0).sin() * 0.06
-            } else if is_aimed && is_free {
-                1.04
+            // Crisp SVG Mahjong emblem painted FLAT directly onto the top face of the 3D tile!
+            // Climb, jump, and slide across the Mahjong tower to read upper-tier symbols!
+            let decal_col = if is_selected {
+                Color::from_hex(0xD8FFEE)
+            } else if is_free {
+                Color::WHITE
             } else {
-                0.86
+                Color::rgba(0.66, 0.68, 0.74, 0.85)
             };
-            draw.billboard(
+            let decal_sz = if is_selected { TILE_W * 0.84 } else { TILE_W * 0.78 };
+            draw.decal_flat(
                 Some(self.assets.tile_icons[t.symbol]),
-                Vec3::new(pos.x, pos.y + TILE_H + 0.45 + y_lift, pos.z),
-                Vec2::new(icon_scale, icon_scale),
-                Color::rgba(1.0, 1.0, 1.0, icon_alpha),
+                Vec3::new(pos.x, pos.y + TILE_H + 0.018 + y_lift, pos.z),
+                Vec2::new(decal_sz, decal_sz),
+                0.0,
+                decal_col,
             );
 
             // Glowing vertical selection beacon + jade outline on selected tile!
@@ -1261,13 +1467,15 @@ impl GameState {
 
         // --- FIRST-PERSON TACTICAL LASER CARBINE VIEWMODEL ---
         if self.phase == Phase::Playing {
-            let bob_x = (self.walk_bob * 4.5).cos() * 0.018;
-            let bob_y = (self.walk_bob * 9.0).sin().abs() * -0.02;
+            let bob_x = if self.sliding { 0.0 } else { (self.walk_bob * 4.5).cos() * 0.018 };
+            let bob_y = if self.sliding { 0.0 } else { (self.walk_bob * 9.0).sin().abs() * -0.02 };
+            let slide_drop = if self.sliding { 0.04 } else { 0.0 };
             let gun_pos = draw.camera.pos
                 + fwd * (0.64 - self.recoil)
                 + right * (0.30 + bob_x)
-                - up * (0.24 - bob_y);
-            let gun_rot = Quat::from_euler_yxz(self.yaw, self.pitch + self.recoil * 0.9, 0.0);
+                - up * (0.24 - bob_y + slide_drop);
+            let gun_roll = if self.sliding { 0.24 } else { self.cam_roll * 1.4 };
+            let gun_rot = Quat::from_euler_yxz(self.yaw, self.pitch + self.recoil * 0.9, gun_roll);
             draw.mesh(
                 self.assets.rifle,
                 Transform { pos: gun_pos, rot: gun_rot, scale: Vec3::splat(0.82) },
@@ -1296,10 +1504,13 @@ impl GameState {
         let white = Color::rgb(0.96, 0.97, 0.98);
         let dim = Color::rgb(0.68, 0.74, 0.80);
 
-        // Top-Right: Audio toggle button (always available)
+        // Top-Right: Settings + Audio quick buttons
         let mlbl = if self.muted { "AUDIO OFF" } else { "AUDIO ON" };
         if draw.ui_button(input, w - 154.0, 16.0, 138.0, 36.0, mlbl) {
             self.muted = !self.muted;
+        }
+        if !self.paused && draw.ui_button(input, w - 302.0, 16.0, 138.0, 36.0, "MENU [ESC]") {
+            self.paused = true;
         }
 
         // Active Combat HUD (hidden on Title so the temple courtyard breathes cleanly)
@@ -1325,11 +1536,11 @@ impl GameState {
             );
 
             // Top-Center: Deadpan HQ Radio Dispatch Banner (neatly centered in open top gap)
-            if self.radio_timer > 0.0 && !self.radio_msg.is_empty() && self.phase == Phase::Playing {
+            if self.radio_timer > 0.0 && !self.radio_msg.is_empty() && self.phase == Phase::Playing && !self.paused {
                 let (rw, _) = draw.ui_text_measure(2.0, &self.radio_msg);
                 let pw = rw + 28.0;
                 let left_edge = 16.0 + left_w + 16.0;
-                let right_edge = w - 168.0;
+                let right_edge = w - 316.0;
                 let (px, py) = if pw <= (right_edge - left_edge) {
                     (left_edge + ((right_edge - left_edge) - pw) * 0.5, 16.0)
                 } else {
@@ -1350,7 +1561,7 @@ impl GameState {
                 draw.ui_text(88.0, h - 68.0, 2.0, white, SYMBOL_NAMES[sym]);
             } else {
                 draw.ui_text(28.0, h - 88.0, 2.0, dim, "NO TILE LOCKED [E/RMB]");
-                draw.ui_text(28.0, h - 66.0, 2.0, dim, "TOUCH ANY FREE EDGE TILE");
+                draw.ui_text(28.0, h - 66.0, 2.0, dim, "CLIMB & TOUCH FREE EDGES");
             }
             draw.ui_text(28.0, h - 34.0, 2.0, white, &format!("ARMOR {:>3.0}%", self.hp));
             draw.ui_bar(
@@ -1362,14 +1573,27 @@ impl GameState {
                 Color::rgba(0.18, 0.16, 0.22, 1.0),
                 if self.hp > 35.0 { jade } else { crimson },
             );
+
+            // Parkour Momentum Badge above bottom-left panel when sliding or slide-vaulting!
+            let hspd = (self.vel.x * self.vel.x + self.vel.z * self.vel.z).sqrt();
+            if self.sliding || self.vault_flash > 0.0 {
+                let (tag, col) = if self.vault_flash > 0.0 {
+                    (format!("PARKOUR VAULT // {:>4.1} M/S", hspd), gold)
+                } else {
+                    (format!("POWER SLIDE // {:>4.1} M/S", hspd), cyan)
+                };
+                let (tw, _) = draw.ui_text_measure(2.0, &tag);
+                draw.ui_panel(16.0, h - 140.0, tw + 24.0, 30.0, bg, col, 2.0);
+                draw.ui_text(28.0, h - 132.0, 2.0, col, &tag);
+            }
         }
 
         // Center-Screen Dynamic SVG Tactical Reticle + Context Touch Prompt
-        if self.phase == Phase::Playing {
+        if self.phase == Phase::Playing && !self.paused {
             let ret_sz = 34.0 + self.recoil * 70.0;
             let ret_col = if self.hitmarker_timer > 0.0 {
                 crimson
-            } else if self.aimed_tile.is_some_and(|(_, free, d)| free && d < 6.8) {
+            } else if self.aimed_tile.is_some_and(|(_, free, d)| free && d < 7.2) {
                 gold
             } else {
                 cyan
@@ -1383,7 +1607,7 @@ impl GameState {
                 ret_col,
             );
 
-            let range = data.config("mahjong.cfg").map(|c| c.f32("player.touch_range", 6.8)).unwrap_or(6.8);
+            let range = data.config("mahjong.cfg").map(|c| c.f32("player.touch_range", 7.2)).unwrap_or(7.2);
             if let Some((ti, is_free, dist)) = self.aimed_tile
                 && dist <= range + 2.5
             {
@@ -1403,11 +1627,11 @@ impl GameState {
         }
 
         // Title Screen Overlay
-        if self.phase == Phase::Title {
+        if self.phase == Phase::Title && !self.paused {
             let bw = 684.0;
             let bh = 252.0;
             let bx = (w - bw) * 0.5;
-            let by = h * 0.08;
+            let by = h * 0.07;
             draw.ui_panel(bx, by, bw, bh, Color::rgba(0.05, 0.06, 0.10, 0.88), gold, 3.0);
 
             let t = "MAHJONG WARS";
@@ -1419,20 +1643,92 @@ impl GameState {
             let (sw, _) = draw.ui_text_measure(2.0, sub);
             draw.ui_text((w - sw) * 0.5, by + 70.0, 2.0, jade, sub);
 
-            let dir = "DIRECTIVE 404: CLEAR 16 PAIRS. IGNORE ALIEN PROTESTS.";
+            let dir = "DIRECTIVE 404: CLIMB THE TOWER. CLEAR 16 PAIRS.";
             let (dw, _) = draw.ui_text_measure(2.0, dir);
             draw.ui_text((w - dw) * 0.5, by + 98.0, 2.0, gold, dir);
 
-            let c1 = "WASD MOVE   SPACE JUMP   LMB LASER RIFLE";
+            let c1 = "WASD MOVE  SPACE JUMP  SHIFT/C SLIDE  LMB LASER";
             let (c1w, _) = draw.ui_text_measure(2.0, c1);
             draw.ui_text((w - c1w) * 0.5, by + 132.0, 2.0, white, c1);
 
-            let c2 = "E / RMB TOUCH FREE PAIRS   ESC UNLOCK MOUSE";
+            let c2 = "E / RMB TOUCH FREE TILE   ESC PAUSE & SETTINGS";
             let (c2w, _) = draw.ui_text_measure(2.0, c2);
             draw.ui_text((w - c2w) * 0.5, by + 158.0, 2.0, dim, c2);
 
             if draw.ui_button(input, (w - 240.0) * 0.5, by + 194.0, 240.0, 42.0, "DEPLOY AGENT [SPC]") {
                 self.start_run();
+            }
+        }
+
+        // Deadpan Pause & Settings Menu Overlay (interactive sliders & toggles!)
+        if self.paused {
+            draw.ui_rect(0.0, 0.0, w, h, Color::rgba(0.03, 0.04, 0.08, 0.62));
+            let bw = 540.0;
+            let bh = 412.0;
+            let bx = (w - bw) * 0.5;
+            let by = (h - bh) * 0.5;
+            draw.ui_panel(bx, by, bw, bh, Color::rgba(0.05, 0.06, 0.11, 0.96), gold, 3.0);
+
+            let heading = if self.phase == Phase::Playing {
+                "OPERATION PAUSED"
+            } else {
+                "BUREAU SETTINGS"
+            };
+            let (hw, _) = draw.ui_text_measure(3.0, heading);
+            draw.ui_text((w - hw) * 0.5, by + 22.0, 3.0, gold, heading);
+
+            let sub = "PARANORMAL TILE OPS // FIELD CALIBRATION";
+            let (sw, _) = draw.ui_text_measure(2.0, sub);
+            draw.ui_text((w - sw) * 0.5, by + 56.0, 2.0, jade, sub);
+
+            let lx = bx + 28.0;
+            let sx = bx + 258.0;
+            let sw_bar = 186.0;
+            let vx = bx + 456.0;
+
+            // 1. Mouse Sensitivity Slider
+            let y1 = by + 98.0;
+            draw.ui_text(lx, y1 + 4.0, 2.0, white, "MOUSE SENSITIVITY");
+            draw.ui_slider(input, sx, y1, sw_bar, 22.0, 0.10, 2.50, &mut self.mouse_sens_mult);
+            draw.ui_text(vx, y1 + 4.0, 2.0, cyan, &format!("{:.2}X", self.mouse_sens_mult));
+
+            // 2. Master Volume Slider
+            let y2 = by + 144.0;
+            draw.ui_text(lx, y2 + 4.0, 2.0, white, "MASTER VOLUME");
+            draw.ui_slider(input, sx, y2, sw_bar, 22.0, 0.0, 1.0, &mut self.master_volume);
+            draw.ui_text(vx, y2 + 4.0, 2.0, cyan, &format!("{:>3.0}%", self.master_volume * 100.0));
+
+            // 3. Field of View Slider
+            let y3 = by + 190.0;
+            draw.ui_text(lx, y3 + 4.0, 2.0, white, "FIELD OF VIEW");
+            draw.ui_slider(input, sx, y3, sw_bar, 22.0, 58.0, 100.0, &mut self.fov_deg);
+            draw.ui_text(vx, y3 + 4.0, 2.0, cyan, &format!("{:>3.0}", self.fov_deg));
+
+            // 4. Toggle Buttons Row (Invert Y + Mute)
+            let y4 = by + 236.0;
+            let inv_lbl = if self.invert_y { "INVERT Y: ON" } else { "INVERT Y: OFF" };
+            if draw.ui_button(input, lx, y4, 232.0, 36.0, inv_lbl) {
+                self.invert_y = !self.invert_y;
+            }
+            let aud_lbl = if self.muted { "AUDIO: MUTED" } else { "AUDIO: ACTIVE" };
+            if draw.ui_button(input, bx + bw - 260.0, y4, 232.0, 36.0, aud_lbl) {
+                self.muted = !self.muted;
+            }
+
+            // 5. Action Buttons
+            let resume_lbl = if self.phase == Phase::Playing {
+                "RESUME OPERATION [ESC]"
+            } else {
+                "CLOSE SETTINGS [ESC]"
+            };
+            if draw.ui_button(input, lx, by + 294.0, bw - 56.0, 42.0, resume_lbl) {
+                self.paused = false;
+            }
+            if draw.ui_button(input, lx, by + 350.0, 232.0, 38.0, "RESTART BOARD") {
+                self.start_run();
+            }
+            if draw.ui_button(input, bx + bw - 260.0, by + 350.0, 232.0, 38.0, "QUIT TO DESKTOP") {
+                self.quit_requested = true;
             }
         }
 

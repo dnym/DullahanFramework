@@ -29,10 +29,11 @@ A juiced-up Synthwave endless cyber-runner dogfooding 3D PBR, shadows, hot-reloa
 
 > *Department of Paranormal Tile Operations — Directive 404: Clear all 16 Mahjong Solitaire pairs in legal edge order. Ignore alien ectoplasmic protests.*
 
-- **First-Person Combat + Solitaire Rules:** Run & jump across a giant 3-layer 100%-solvable 3D Mahjong pyramid (`demos/mahjong_wars/`) with native X11 FPS mouse lock (`app.set_cursor_locked`), walkable tile step-up collision, and a first-person laser carbine viewmodel with recoil & luminous plasma bolts.
-- **Weird Alien Ghosts & SVG VFX:** SDF-sculpted floating three-eyed alien ghosts & psychic haloed wardens animated with squash & stretch, dynamic world-space HP bars, 8 color-coded SVG Mahjong tile emblems, SVG dynamic reticle, star muzzle flash, alien ectoplasm pop rings, and expanding **Jade & Gold Chinese Talisman Shockwave Seals** (`seal.svg`) that blast nearby ghosts when a pair matches!
+- **First-Person Parkour + Solitaire Rules:** Climb, jump, **power-slide (`Shift`/`C`/`Ctrl`)**, and **slide-jump vault** across a giant 3-layer 100%-solvable 3D Mahjong pyramid (`demos/mahjong_wars/`) with 1:1 X11 FPS mouse lock (`app.set_cursor_locked`), tile-edge auto-mantle, camera roll + FOV kick, and a canted laser carbine viewmodel.
+- **Painted Tile Emblems, Alien Ghosts & SVG VFX:** 8 color-coded SVG Mahjong symbols painted **flat onto the 3D tile faces** (`draw.decal_flat`) so you must climb and parkour over the tower to spot pairs, SDF-sculpted floating alien ghosts with squash & stretch + world-space HP bars, SVG reticle/muzzle flash/ecto rings, and expanding **Jade & Gold Chinese Talisman Shockwave Seals** (`seal.svg`).
+- **Pause & Settings Menu (`Esc`):** Interactive zero-dependency `ui_slider` calibration for Mouse Sensitivity, Master Volume, Field of View, Invert Y, and Audio Mute.
 - **Chinese Pentatonic War Music:** Seamless D-major pentatonic Guzheng + Erhu + Taiko war drums + woodblock loop (`seam=0.0003`) + bronze gong match chime and 6 tactical SFX.
-- **Controls:** `WASD` move · `Mouse` look (click to lock, `Esc` to unlock) · `Space` jump · `LMB`/`F` laser rifle · `E`/`RMB` touch free Mahjong tile · `M` mute · `F1` debug overlays.
+- **Controls:** `WASD` move · `Mouse` look · `Space` jump / slide-vault · `Shift`/`C`/`Ctrl` parkour slide · `LMB`/`F` laser rifle · `E`/`RMB` touch free Mahjong tile · `Esc` pause & settings · `M` mute · `F1` debug overlays.
 
 ---
 
