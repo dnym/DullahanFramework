@@ -38,6 +38,11 @@ pub struct App {
     pub dev: DevBridge,
 
     pub frame: u64,
+    /// Max milliseconds per frame spent uploading background-loaded meshes (at least one
+    /// mesh is always uploaded per frame while any are waiting).
+    pub upload_budget_ms: f32,
+    /// Background loading summary for the current frame.
+    pub load_report: crate::dullahan::assets::LoadReport,
     pub dt: f32,
     pub elapsed: f32,
     pub fps: f32,
@@ -99,6 +104,8 @@ impl App {
             input: InputState::default(),
             dev,
             frame: 0,
+            upload_budget_ms: 2.0,
+            load_report: Default::default(),
             dt: 1.0 / 60.0,
             elapsed: 0.0,
             fps: 60.0,
@@ -128,6 +135,15 @@ impl App {
 
     pub fn load_mesh<P: AsRef<Path>>(&mut self, path: P) -> MeshHandle {
         self.assets.load_mesh(&self.platform.gl, path)
+    }
+
+    /// Loads a mesh on a background thread; see `Assets::load_mesh_async`.
+    pub fn load_mesh_async<P: AsRef<Path>>(&mut self, path: P) -> MeshHandle {
+        self.assets.load_mesh_async(path)
+    }
+
+    pub fn unload_mesh(&mut self, handle: MeshHandle) {
+        self.assets.unload_mesh(&self.platform.gl, handle)
     }
 
     /// Uploads static per-instance transforms; draw with `app.draw.mesh_instances(...)`.
@@ -210,6 +226,9 @@ impl App {
         // Tier 1 (assets & shaders) + Tier 2 (data configs/tables/levels) hot-reload
         self.assets.hot_reload(&self.platform.gl, &mut self.gfx, false);
         self.data.hot_reload(false);
+        // Upload meshes parsed by background loader threads, within the frame budget.
+        let budget = std::time::Duration::from_secs_f32(self.upload_budget_ms.max(0.0) / 1000.0);
+        self.load_report = self.assets.poll_loads(&self.platform.gl, budget);
 
         self.input.begin_frame(self.dt);
         self.platform.poll_events(&mut self.input);
