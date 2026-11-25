@@ -334,6 +334,9 @@ pub struct GlFns {
 
     pub glDrawArrays: unsafe extern "system" fn(GLenum, GLint, GLsizei),
     pub glDrawElements: unsafe extern "system" fn(GLenum, GLsizei, GLenum, *const c_void),
+    pub glDrawElementsInstanced: unsafe extern "system" fn(GLenum, GLsizei, GLenum, *const c_void, GLsizei),
+    pub glVertexAttribDivisor: unsafe extern "system" fn(GLuint, GLuint),
+    pub glDisableVertexAttribArray: unsafe extern "system" fn(GLuint),
 
     pub glGenTextures: unsafe extern "system" fn(GLsizei, *mut GLuint),
     pub glBindTexture: unsafe extern "system" fn(GLenum, GLuint),
@@ -427,6 +430,9 @@ impl GlFns {
 
             glDrawArrays: load_fn!(glDrawArrays),
             glDrawElements: load_fn!(glDrawElements),
+            glDrawElementsInstanced: load_fn!(glDrawElementsInstanced),
+            glVertexAttribDivisor: load_fn!(glVertexAttribDivisor),
+            glDisableVertexAttribArray: load_fn!(glDisableVertexAttribArray),
 
             glGenTextures: load_fn!(glGenTextures),
             glBindTexture: load_fn!(glBindTexture),

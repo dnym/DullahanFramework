@@ -6,12 +6,12 @@
 //! - Batched 2D UI overlay (solid/bordered panels, progress bars, sprites, 9-slice, built-in bitmap font)
 //! - Framebuffer PNG screenshot capture
 
-use crate::dullahan::assets::{Assets, MeshHandle, TexHandle};
+use crate::dullahan::assets::{Assets, InstanceHandle, MeshHandle, TexHandle};
 use crate::dullahan::font;
 use crate::dullahan::formats::gltf::{AlphaMode, GltfCollider, GltfModel, GltfNode};
 use crate::dullahan::formats::png;
 use crate::dullahan::geom::HeightField;
-use crate::dullahan::math::{Aabb, Color, Mat4, Quat, Transform, Vec2, Vec3, clamp, deg_to_rad};
+use crate::dullahan::math::{Aabb, Color, Frustum, Mat4, Quat, Transform, Vec2, Vec3, clamp, deg_to_rad};
 use crate::dullahan::platform::{
     GL_ARRAY_BUFFER, GL_BACK, GL_BLEND, GL_CCW, GL_CLAMP_TO_EDGE, GL_COLOR_ATTACHMENT0,
     GL_COLOR_BUFFER_BIT, GL_COMPILE_STATUS, GL_CULL_FACE, GL_DEPTH_ATTACHMENT,
@@ -171,6 +171,10 @@ pub struct FrameStats {
     pub triangles: u32,
     pub lines: u32,
     pub ui_quads: u32,
+    /// Mesh / instance-batch draw commands skipped by frustum culling (main pass).
+    pub culled: u32,
+    /// Instances drawn through `mesh_instances` (main pass).
+    pub instances: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +515,100 @@ pub fn create_heightfield_mesh(
     }
 }
 
+/// Static per-instance transforms on the GPU (one column-major `Mat4` per instance),
+/// drawn with `DrawList::mesh_instances`. Instances should use uniform scale: the
+/// instanced shader path transforms normals with the model matrix's upper 3x3.
+pub struct GpuInstances {
+    vbo: GLuint,
+    pub count: u32,
+    /// Bounds of the instance origins (translation parts).
+    pub origin_bounds: Aabb,
+    /// Largest axis scale of any instance, used to grow `origin_bounds` by the mesh size.
+    pub max_scale: f32,
+}
+
+pub fn upload_instances(gl: &GlFns, transforms: &[Mat4]) -> GpuInstances {
+    let mut inst = GpuInstances { vbo: 0, count: 0, origin_bounds: Aabb::new(Vec3::ZERO, Vec3::ZERO), max_scale: 0.0 };
+    unsafe { (gl.glGenBuffers)(1, &mut inst.vbo) };
+    write_instances(gl, &mut inst, transforms);
+    inst
+}
+
+pub fn write_instances(gl: &GlFns, inst: &mut GpuInstances, transforms: &[Mat4]) {
+    let mut bounds: Option<Aabb> = None;
+    let mut max_scale = 0.0f32;
+    for t in transforms {
+        let o = Vec3::new(t.m[12], t.m[13], t.m[14]);
+        match bounds.as_mut() {
+            Some(b) => b.include(o),
+            None => bounds = Some(Aabb::new(o, o)),
+        }
+        for c in 0..3 {
+            let l = (t.m[c * 4] * t.m[c * 4] + t.m[c * 4 + 1] * t.m[c * 4 + 1] + t.m[c * 4 + 2] * t.m[c * 4 + 2]).sqrt();
+            max_scale = max_scale.max(l);
+        }
+    }
+    inst.count = transforms.len() as u32;
+    inst.origin_bounds = bounds.unwrap_or(Aabb::new(Vec3::ZERO, Vec3::ZERO));
+    inst.max_scale = max_scale;
+    unsafe {
+        (gl.glBindBuffer)(GL_ARRAY_BUFFER, inst.vbo);
+        (gl.glBufferData)(
+            GL_ARRAY_BUFFER,
+            std::mem::size_of_val(transforms) as GLsizeiptr,
+            transforms.as_ptr() as *const c_void,
+            GL_STATIC_DRAW,
+        );
+        (gl.glBindBuffer)(GL_ARRAY_BUFFER, 0);
+    }
+}
+
+/// Draws `prim` (its VAO must be bound) once per instance, feeding `inst`'s matrices to
+/// attribute locations 4-7, then restores the VAO's attribute state.
+unsafe fn draw_elements_instanced(gl: &GlFns, prim: &GpuPrimitive, inst: &GpuInstances) {
+    unsafe {
+        (gl.glBindBuffer)(GL_ARRAY_BUFFER, inst.vbo);
+        for col in 0..4u32 {
+            let loc = 4 + col;
+            (gl.glEnableVertexAttribArray)(loc);
+            (gl.glVertexAttribPointer)(loc, 4, GL_FLOAT, GL_FALSE, 64, (col as usize * 16) as *const c_void);
+            (gl.glVertexAttribDivisor)(loc, 1);
+        }
+        (gl.glDrawElementsInstanced)(GL_TRIANGLES, prim.index_count, GL_UNSIGNED_INT, ptr::null(), inst.count as GLsizei);
+        for loc in 4..8u32 {
+            (gl.glVertexAttribDivisor)(loc, 0);
+            (gl.glDisableVertexAttribArray)(loc);
+        }
+        (gl.glBindBuffer)(GL_ARRAY_BUFFER, 0);
+    }
+}
+
+/// Inserts `#define <name>` right after the `#version` line of a GLSL source.
+fn with_define(src: &str, name: &str) -> String {
+    match src.find('\n') {
+        Some(i) if src.trim_start().starts_with("#version") => format!("{}\n#define {name}{}", &src[..i], &src[i..]),
+        _ => format!("#define {name}\n{src}"),
+    }
+}
+
+pub fn destroy_instances(gl: &GlFns, inst: &GpuInstances) {
+    unsafe { (gl.glDeleteBuffers)(1, &inst.vbo) };
+}
+
+impl GpuInstances {
+    /// Conservative world bounds of all instances of a mesh with local bounds `mesh_bounds`.
+    pub fn world_bounds(&self, mesh_bounds: Aabb, model: Mat4) -> Aabb {
+        let h = mesh_bounds.half_extents();
+        let c = mesh_bounds.center();
+        let r = (h.len() + c.len()) * self.max_scale;
+        let grown = Aabb::new(
+            self.origin_bounds.min - Vec3::new(r, r, r),
+            self.origin_bounds.max + Vec3::new(r, r, r),
+        );
+        grown.transformed(model)
+    }
+}
+
 pub fn destroy_mesh(gl: &GlFns, mesh: &GpuMesh) {
     unsafe {
         for prims in &mesh.meshes {
@@ -540,6 +638,13 @@ struct SolidBoxCmd {
 }
 
 #[derive(Clone)]
+struct InstancedDrawCmd {
+    handle: MeshHandle,
+    instances: InstanceHandle,
+    model: Mat4,
+    tint: Color,
+}
+
 struct MeshDrawCmd {
     handle: MeshHandle,
     model: Mat4,
@@ -618,8 +723,13 @@ pub struct DrawList {
     pub shadow_extent: f32,
     pub post: PostSettings,
     pub overlay: DebugOverlay,
+    /// Skip mesh draws whose bounds are outside the camera (main pass) or light (shadow pass)
+    /// frustum. Draws with node overrides are never culled, since animated nodes may leave
+    /// the rest-pose bounds.
+    pub frustum_culling: bool,
     point_lights: Vec<PointLight>,
     meshes: Vec<MeshDrawCmd>,
+    instanced: Vec<InstancedDrawCmd>,
     boxes: Vec<SolidBoxCmd>,
     billboards: Vec<BillboardCmd>,
     lines: Vec<LineVertex>,
@@ -644,8 +754,10 @@ impl Default for DrawList {
             shadow_extent: 18.0,
             post: PostSettings::default(),
             overlay: DebugOverlay::None,
+            frustum_culling: true,
             point_lights: Vec::new(),
             meshes: Vec::new(),
+            instanced: Vec::new(),
             boxes: Vec::new(),
             billboards: Vec::new(),
             lines: Vec::new(),
@@ -659,6 +771,7 @@ impl DrawList {
     pub fn clear(&mut self) {
         self.point_lights.clear();
         self.meshes.clear();
+        self.instanced.clear();
         self.boxes.clear();
         self.billboards.clear();
         self.lines.clear();
@@ -703,6 +816,13 @@ impl DrawList {
         if self.point_lights.len() < MAX_POINT_LIGHTS {
             self.point_lights.push(PointLight { pos, color, radius, intensity });
         }
+    }
+
+    /// Draws `handle` once per transform in `instances` (created with `Assets::create_instances`),
+    /// all placed by `transform`, in a single draw call per primitive. Opaque materials only;
+    /// instances should use uniform scale.
+    pub fn mesh_instances(&mut self, handle: MeshHandle, instances: InstanceHandle, transform: Transform, tint: Color) {
+        self.instanced.push(InstancedDrawCmd { handle, instances, model: transform.to_mat4(), tint });
     }
 
     pub fn mesh(&mut self, handle: MeshHandle, transform: Transform) {
@@ -1115,10 +1235,18 @@ fn push_wire_corners(dst: &mut Vec<LineVertex>, corners: &[Vec3; 8], color: Colo
 
 const SHADOW_VERT: &str = r#"#version 330 core
 layout(location = 0) in vec3 a_pos;
+#ifdef INSTANCED
+layout(location = 4) in mat4 a_inst;
+#endif
 uniform mat4 u_light_vp;
 uniform mat4 u_model;
 void main() {
-    gl_Position = u_light_vp * u_model * vec4(a_pos, 1.0);
+#ifdef INSTANCED
+    mat4 model = u_model * a_inst;
+#else
+    mat4 model = u_model;
+#endif
+    gl_Position = u_light_vp * model * vec4(a_pos, 1.0);
 }
 "#;
 
@@ -1131,6 +1259,10 @@ layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_norm;
 layout(location = 2) in vec2 a_uv;
 layout(location = 3) in vec4 a_color;
+#ifdef INSTANCED
+// Per-instance transform (locations 4-7). Compiled with `#define INSTANCED` for mesh_instances.
+layout(location = 4) in mat4 a_inst;
+#endif
 
 uniform mat4 u_view_proj;
 uniform mat4 u_model;
@@ -1143,9 +1275,16 @@ out vec4 v_color;
 out vec4 v_light_pos;
 
 void main() {
-    vec4 wp = u_model * vec4(a_pos, 1.0);
+#ifdef INSTANCED
+    mat4 model = u_model * a_inst;
+    vec3 n = mat3(model) * a_norm; // instances use uniform scale
+#else
+    mat4 model = u_model;
+    vec3 n = mat3(transpose(inverse(model))) * a_norm;
+#endif
+    vec4 wp = model * vec4(a_pos, 1.0);
     v_world_pos = wp.xyz;
-    v_world_norm = normalize(mat3(transpose(inverse(u_model))) * a_norm);
+    v_world_norm = normalize(n);
     v_uv = a_uv;
     v_color = a_color;
     v_light_pos = u_light_vp * wp;
@@ -1599,6 +1738,11 @@ pub struct Gfx {
 
     pbr_prog: GLuint,
     pbr_u: PbrUniforms,
+    pbr_inst_prog: GLuint,
+    pbr_inst_u: PbrUniforms,
+    shadow_inst_prog: GLuint,
+    u_shadow_inst_lvp: GLint,
+    u_shadow_inst_model: GLint,
 
     solid_prog: GLuint,
     u_solid_vp: GLint,
@@ -1668,6 +1812,8 @@ impl Gfx {
     pub fn new(gl: &GlFns) -> Result<Self, String> {
         let shadow_prog = compile_program(gl, SHADOW_VERT, SHADOW_FRAG)?;
         let pbr_prog = compile_program(gl, DEFAULT_PBR_VERT, DEFAULT_PBR_FRAG)?;
+        let pbr_inst_prog = compile_program(gl, &with_define(DEFAULT_PBR_VERT, "INSTANCED"), DEFAULT_PBR_FRAG)?;
+        let shadow_inst_prog = compile_program(gl, &with_define(SHADOW_VERT, "INSTANCED"), SHADOW_FRAG)?;
         let solid_prog = compile_program(gl, SOLID_VERT, SOLID_FRAG)?;
         let line_prog = compile_program(gl, LINE_VERT, LINE_FRAG)?;
         let ui_prog = compile_program(gl, UI_VERT, UI_FRAG)?;
@@ -1793,6 +1939,11 @@ impl Gfx {
             shadow_tex,
             pbr_u: PbrUniforms::query(gl, pbr_prog),
             pbr_prog,
+            pbr_inst_u: PbrUniforms::query(gl, pbr_inst_prog),
+            pbr_inst_prog,
+            u_shadow_inst_lvp: uniform_loc(gl, shadow_inst_prog, "u_light_vp"),
+            u_shadow_inst_model: uniform_loc(gl, shadow_inst_prog, "u_model"),
+            shadow_inst_prog,
             u_solid_vp: uniform_loc(gl, solid_prog, "u_view_proj"),
             u_solid_model: uniform_loc(gl, solid_prog, "u_model"),
             u_solid_lvp: uniform_loc(gl, solid_prog, "u_light_vp"),
@@ -1863,10 +2014,23 @@ impl Gfx {
         let vs = vert_override.unwrap_or(DEFAULT_PBR_VERT);
         let fs = frag_override.unwrap_or(DEFAULT_PBR_FRAG);
         let new_prog = compile_program(gl, vs, fs)?;
-        let new_u = PbrUniforms::query(gl, new_prog);
+        // Custom vertex shaders need the `#ifdef INSTANCED` block of DEFAULT_PBR_VERT for
+        // mesh_instances to place instances; without it they all draw at the batch transform.
+        let new_inst = match compile_program(gl, &with_define(vs, "INSTANCED"), fs) {
+            Ok(p) => p,
+            Err(e) => {
+                unsafe { (gl.glDeleteProgram)(new_prog) };
+                return Err(e);
+            }
+        };
         let old = std::mem::replace(&mut self.pbr_prog, new_prog);
-        self.pbr_u = new_u;
-        unsafe { (gl.glDeleteProgram)(old) };
+        self.pbr_u = PbrUniforms::query(gl, new_prog);
+        let old_inst = std::mem::replace(&mut self.pbr_inst_prog, new_inst);
+        self.pbr_inst_u = PbrUniforms::query(gl, new_inst);
+        unsafe {
+            (gl.glDeleteProgram)(old);
+            (gl.glDeleteProgram)(old_inst);
+        }
         Ok(())
     }
 
@@ -1967,6 +2131,26 @@ impl Gfx {
             draw.debug_axes(Vec3::new(0.0, 0.02, 0.0), 2.0);
         }
 
+        // Directional light view-projection snapped around camera target
+        let ext = draw.shadow_extent.max(4.0);
+        let sun_dir = draw.sun_dir.norm();
+        let center = draw.camera.target;
+        let light_pos = center + sun_dir * (ext * 2.0);
+        let light_up = if sun_dir.y.abs() > 0.98 { Vec3::Z } else { Vec3::Y };
+        let light_vp = Mat4::ortho(-ext, ext, -ext, ext, 0.5, ext * 5.0)
+            * Mat4::look_at(light_pos, center, light_up);
+
+        // Frustum culling: (visible in main pass, casts into shadow map)
+        let cull = draw.frustum_culling;
+        let view_frustum = Frustum::from_view_proj(vp);
+        let light_frustum = Frustum::from_view_proj(light_vp);
+        let visibility = |b: Aabb| -> (bool, bool) {
+            if !cull {
+                return (true, true);
+            }
+            (view_frustum.intersects_aabb(b), draw.shadows_enabled && light_frustum.intersects_aabb(b))
+        };
+
         // Flatten PBR draw items
         struct FlatPrim<'a> {
             prim: &'a GpuPrimitive,
@@ -1974,15 +2158,30 @@ impl Gfx {
             model: Mat4,
             tint: Color,
             cam_dist_sq: f32,
+            in_view: bool,
+            in_shadow: bool,
+            instances: Option<&'a GpuInstances>,
         }
         let mut opaque_prims: Vec<FlatPrim<'_>> = Vec::new();
         let mut blend_prims: Vec<FlatPrim<'_>> = Vec::new();
+        let mut inst_prims: Vec<FlatPrim<'_>> = Vec::new();
 
         for cmd in &draw.meshes {
             let Some(gpu_mesh) = assets.mesh(cmd.handle) else { continue };
+            let (in_view, in_shadow) = if cmd.node_overrides.is_empty() {
+                visibility(gpu_mesh.bounds.transformed(cmd.model))
+            } else {
+                (true, true)
+            };
+            if !in_view {
+                stats.culled += 1;
+                if !in_shadow {
+                    continue;
+                }
+            }
             let node_mats = gpu_mesh.compute_node_matrices(&cmd.node_overrides);
 
-            if draw.overlay == DebugOverlay::Colliders {
+            if draw.overlay == DebugOverlay::Colliders && in_view {
                 for col in &gpu_mesh.colliders {
                     push_wire_aabb_transformed(&mut draw.collider_lines, col.bounds, cmd.model, Color::YELLOW);
                 }
@@ -2000,9 +2199,11 @@ impl Gfx {
 
                 for prim in prims {
                     let mat = &gpu_mesh.materials[prim.material_idx];
-                    let item = FlatPrim { prim, mat, model: world_m, tint: cmd.tint, cam_dist_sq: dist_sq };
+                    let item = FlatPrim { prim, mat, model: world_m, tint: cmd.tint, cam_dist_sq: dist_sq, in_view, in_shadow, instances: None };
                     if mat.alpha_mode == AlphaMode::Blend || cmd.tint.a < 0.999 {
-                        blend_prims.push(item);
+                        if in_view {
+                            blend_prims.push(item);
+                        }
                     } else {
                         opaque_prims.push(item);
                     }
@@ -2011,18 +2212,41 @@ impl Gfx {
         }
         blend_prims.sort_by(|a, b| b.cam_dist_sq.total_cmp(&a.cam_dist_sq));
 
-        // Compute directional light view-projection snapped around camera target
-        let ext = draw.shadow_extent.max(4.0);
-        let sun_dir = draw.sun_dir.norm();
-        let center = draw.camera.target;
-        let light_pos = center + sun_dir * (ext * 2.0);
-        let light_up = if sun_dir.y.abs() > 0.98 { Vec3::Z } else { Vec3::Y };
-        let light_vp = Mat4::ortho(-ext, ext, -ext, ext, 0.5, ext * 5.0)
-            * Mat4::look_at(light_pos, center, light_up);
+        for cmd in &draw.instanced {
+            let Some(gpu_mesh) = assets.mesh(cmd.handle) else { continue };
+            let Some(inst) = assets.instances(cmd.instances) else { continue };
+            if inst.count == 0 {
+                continue;
+            }
+            let (in_view, in_shadow) = visibility(inst.world_bounds(gpu_mesh.bounds, cmd.model));
+            if !in_view {
+                stats.culled += 1;
+                if !in_shadow {
+                    continue;
+                }
+            }
+            let node_mats = gpu_mesh.compute_node_matrices(&[]);
+            for (ni, node) in gpu_mesh.nodes.iter().enumerate() {
+                if node.is_collider {
+                    continue;
+                }
+                let Some(mi) = node.mesh else { continue };
+                let Some(prims) = gpu_mesh.meshes.get(mi) else { continue };
+                for prim in prims {
+                    let mat = &gpu_mesh.materials[prim.material_idx];
+                    inst_prims.push(FlatPrim {
+                        prim, mat, model: cmd.model * node_mats[ni], tint: cmd.tint,
+                        cam_dist_sq: 0.0, in_view, in_shadow, instances: Some(inst),
+                    });
+                }
+            }
+        }
 
         unsafe {
             // 0. Directional Shadow Map Pass
-            if draw.shadows_enabled && (!opaque_prims.is_empty() || draw.boxes.iter().any(|b| b.cast_shadow)) {
+            if draw.shadows_enabled
+                && (opaque_prims.iter().chain(&inst_prims).any(|p| p.in_shadow) || draw.boxes.iter().any(|b| b.cast_shadow))
+            {
                 (gl.glBindFramebuffer)(GL_FRAMEBUFFER, self.shadow_fbo);
                 (gl.glViewport)(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
                 (gl.glEnable)(GL_DEPTH_TEST);
@@ -2036,7 +2260,7 @@ impl Gfx {
                 (gl.glUseProgram)(self.shadow_prog);
                 (gl.glUniformMatrix4fv)(self.u_shadow_lvp, 1, GL_FALSE, light_vp.m.as_ptr());
 
-                for item in &opaque_prims {
+                for item in opaque_prims.iter().filter(|p| p.in_shadow) {
                     if item.mat.double_sided {
                         (gl.glDisable)(GL_CULL_FACE);
                     } else {
@@ -2045,6 +2269,22 @@ impl Gfx {
                     (gl.glUniformMatrix4fv)(self.u_shadow_model, 1, GL_FALSE, item.model.m.as_ptr());
                     (gl.glBindVertexArray)(item.prim.vao);
                     (gl.glDrawElements)(GL_TRIANGLES, item.prim.index_count, GL_UNSIGNED_INT, ptr::null());
+                }
+
+                if inst_prims.iter().any(|p| p.in_shadow) {
+                    (gl.glUseProgram)(self.shadow_inst_prog);
+                    (gl.glUniformMatrix4fv)(self.u_shadow_inst_lvp, 1, GL_FALSE, light_vp.m.as_ptr());
+                    for item in inst_prims.iter().filter(|p| p.in_shadow) {
+                        if item.mat.double_sided {
+                            (gl.glDisable)(GL_CULL_FACE);
+                        } else {
+                            (gl.glEnable)(GL_CULL_FACE);
+                        }
+                        (gl.glUniformMatrix4fv)(self.u_shadow_inst_model, 1, GL_FALSE, item.model.m.as_ptr());
+                        (gl.glBindVertexArray)(item.prim.vao);
+                        draw_elements_instanced(gl, item.prim, item.instances.unwrap());
+                    }
+                    (gl.glUseProgram)(self.shadow_prog);
                 }
 
                 (gl.glEnable)(GL_CULL_FACE);
@@ -2129,20 +2369,33 @@ impl Gfx {
             }
 
             // 2. PBR Meshes (opaque then sorted transparent)
-            if !opaque_prims.is_empty() || !blend_prims.is_empty() {
+            let any_inst = inst_prims.iter().any(|p| p.in_view);
+            if opaque_prims.iter().any(|p| p.in_view) || !blend_prims.is_empty() || any_inst {
                 (gl.glPolygonMode)(GL_FRONT_AND_BACK, poly_mode);
-                self.bind_pbr_frame_uniforms(gl, vp, light_vp, draw);
+                self.bind_pbr_frame_uniforms(gl, false, vp, light_vp, draw);
 
-                for item in &opaque_prims {
-                    self.draw_pbr_prim(gl, assets, item.prim, item.mat, item.model, item.tint);
+                for item in opaque_prims.iter().filter(|p| p.in_view) {
+                    self.draw_pbr_prim(gl, assets, item.prim, item.mat, item.model, item.tint, None);
                     stats.draw_calls += 1;
                     stats.triangles += (item.prim.index_count / 3) as u32;
+                }
+
+                if any_inst {
+                    self.bind_pbr_frame_uniforms(gl, true, vp, light_vp, draw);
+                    for item in inst_prims.iter().filter(|p| p.in_view) {
+                        let inst = item.instances.unwrap();
+                        self.draw_pbr_prim(gl, assets, item.prim, item.mat, item.model, item.tint, Some(inst));
+                        stats.draw_calls += 1;
+                        stats.instances += inst.count;
+                        stats.triangles = stats.triangles.saturating_add((item.prim.index_count / 3) as u32 * inst.count);
+                    }
+                    self.bind_pbr_frame_uniforms(gl, false, vp, light_vp, draw);
                 }
 
                 if !blend_prims.is_empty() {
                     (gl.glDepthMask)(GL_FALSE);
                     for item in &blend_prims {
-                        self.draw_pbr_prim(gl, assets, item.prim, item.mat, item.model, item.tint);
+                        self.draw_pbr_prim(gl, assets, item.prim, item.mat, item.model, item.tint, None);
                         stats.draw_calls += 1;
                         stats.triangles += (item.prim.index_count / 3) as u32;
                     }
@@ -2377,11 +2630,11 @@ impl Gfx {
         }
     }
 
-    unsafe fn bind_pbr_frame_uniforms(&self, gl: &GlFns, vp: Mat4, light_vp: Mat4, draw: &DrawList) {
-        let u = &self.pbr_u;
+    unsafe fn bind_pbr_frame_uniforms(&self, gl: &GlFns, instanced: bool, vp: Mat4, light_vp: Mat4, draw: &DrawList) {
+        let (prog, u) = if instanced { (self.pbr_inst_prog, &self.pbr_inst_u) } else { (self.pbr_prog, &self.pbr_u) };
         let sun_dir = draw.sun_dir.norm();
         unsafe {
-            (gl.glUseProgram)(self.pbr_prog);
+            (gl.glUseProgram)(prog);
             (gl.glUniformMatrix4fv)(u.view_proj, 1, GL_FALSE, vp.m.as_ptr());
             (gl.glUniformMatrix4fv)(u.light_vp, 1, GL_FALSE, light_vp.m.as_ptr());
             (gl.glUniform1i)(u.base_tex, 0);
@@ -2408,6 +2661,7 @@ impl Gfx {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn draw_pbr_prim(
         &self,
         gl: &GlFns,
@@ -2416,8 +2670,9 @@ impl Gfx {
         mat: &GpuMaterial,
         model: Mat4,
         tint: Color,
+        instances: Option<&GpuInstances>,
     ) {
-        let u = &self.pbr_u;
+        let u = if instances.is_some() { &self.pbr_inst_u } else { &self.pbr_u };
         unsafe {
             if mat.double_sided {
                 (gl.glDisable)(GL_CULL_FACE);
@@ -2447,7 +2702,10 @@ impl Gfx {
             (gl.glUniform1f)(u.alpha_cutoff, cutoff);
 
             (gl.glBindVertexArray)(prim.vao);
-            (gl.glDrawElements)(GL_TRIANGLES, prim.index_count, GL_UNSIGNED_INT, ptr::null());
+            match instances {
+                Some(inst) => draw_elements_instanced(gl, prim, inst),
+                None => (gl.glDrawElements)(GL_TRIANGLES, prim.index_count, GL_UNSIGNED_INT, ptr::null()),
+            }
         }
     }
 
@@ -2506,6 +2764,8 @@ impl Gfx {
             (gl.glDeleteVertexArrays)(1, &self.post_vao);
             (gl.glDeleteProgram)(self.shadow_prog);
             (gl.glDeleteProgram)(self.pbr_prog);
+            (gl.glDeleteProgram)(self.pbr_inst_prog);
+            (gl.glDeleteProgram)(self.shadow_inst_prog);
             (gl.glDeleteProgram)(self.solid_prog);
             (gl.glDeleteProgram)(self.line_prog);
             (gl.glDeleteProgram)(self.ui_prog);

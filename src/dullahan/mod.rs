@@ -130,6 +130,15 @@ impl App {
         self.assets.load_mesh(&self.platform.gl, path)
     }
 
+    /// Uploads static per-instance transforms; draw with `app.draw.mesh_instances(...)`.
+    pub fn create_instances(&mut self, transforms: &[crate::dullahan::math::Mat4]) -> crate::dullahan::assets::InstanceHandle {
+        self.assets.create_instances(&self.platform.gl, transforms)
+    }
+
+    pub fn destroy_instances(&mut self, handle: crate::dullahan::assets::InstanceHandle) {
+        self.assets.destroy_instances(&self.platform.gl, handle)
+    }
+
     pub fn load_texture<P: AsRef<Path>>(&mut self, path: P, linear: bool) -> TexHandle {
         self.assets.load_texture(&self.platform.gl, path, linear)
     }
