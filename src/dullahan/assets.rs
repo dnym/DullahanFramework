@@ -93,6 +93,9 @@ pub struct LoadReport {
     pub in_flight: u32,
 }
 
+/// GPU mesh plus its dependency mtimes (for hot reload) and embedded texture slots.
+type UploadedMesh = (GpuMesh, Vec<(PathBuf, Option<SystemTime>)>, Vec<TexHandle>);
+
 struct LoadJob {
     idx: u32,
     generation: u32,
@@ -640,7 +643,7 @@ impl Assets {
         &mut self,
         gl: &GlFns,
         path: &Path,
-    ) -> Result<(GpuMesh, Vec<(PathBuf, Option<SystemTime>)>, Vec<TexHandle>), String> {
+    ) -> Result<UploadedMesh, String> {
         let model: GltfModel = gltf::load_gltf_file(path)?;
         self.upload_model(gl, model)
     }
@@ -650,7 +653,7 @@ impl Assets {
         &mut self,
         gl: &GlFns,
         model: GltfModel,
-    ) -> Result<(GpuMesh, Vec<(PathBuf, Option<SystemTime>)>, Vec<TexHandle>), String> {
+    ) -> Result<UploadedMesh, String> {
         let dep_mtimes: Vec<(PathBuf, Option<SystemTime>)> = model
             .dependencies
             .iter()
