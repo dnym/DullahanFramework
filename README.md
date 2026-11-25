@@ -18,7 +18,7 @@ A Synthwave endless cyber-runner showcasing 3D PBR, shadows, hot-reloadable bloo
 
 - **3D PBR + Shadows + Post-Processing:** Shared 0.94 KB PBR palette across 11 `.glb` models, 2048×2048 PCF shadows, dynamic hoverboard/headlight point lights, twilight sky gradient, translucent orbital Holo-Shield, and a custom hot-reloadable synthwave bloom + radial chromatic aberration shader (`demos/neon_rush/assets/shaders/post.frag`).
 - **Gameplay & Juice:** 3-lane cyber-highway with launch ramps onto train roofs, oncoming cyber-trains, low plasma barriers, slide-under laser gates, coyote time + jump buffering + fast-fall slam, near-miss callouts (`CLOSE CALL! +50`), camera roll/shake/FOV kick, hitstop, and 3D billboard particle bursts.
-- **Procedural Synthwave Audio:** Seamless 124 BPM synthwave loop (`seam=0.0001`) + 7 synth SFX mixed on a 48 kHz lock-free ALSA thread.
+- **Procedural Synthwave Audio:** Seamless 124 BPM synthwave loop (`seam=0.0001`) + 7 synth SFX mixed on a 48 kHz stereo audio thread (ALSA on Linux, WinMM on Windows).
 - **Controls:** `A`/`D` lanes · `W`/`Space` jump · `S` slide/slam · `M` mute · `F1` debug overlays · `R` restart.
 
 ---
@@ -29,7 +29,7 @@ A Synthwave endless cyber-runner showcasing 3D PBR, shadows, hot-reloadable bloo
 
 > *Department of Paranormal Tile Operations — Directive 404: Climb the tower. Clear all 16 Mahjong Solitaire pairs in legal edge order. Ignore alien ectoplasmic protests.*
 
-- **First-Person Parkour + Solitaire Rules:** Climb, jump, **power-slide (`Shift`/`C`/`Ctrl`)**, and **slide-jump vault** across a giant 3-layer 100%-solvable 3D Mahjong pyramid (`demos/mahjong_wars/`) with 1:1 X11 FPS mouse lock (`app.set_cursor_locked`), tile-edge auto-mantle, camera roll + FOV kick, and a canted laser carbine viewmodel.
+- **First-Person Parkour + Solitaire Rules:** Climb, jump, **power-slide (`Shift`/`C`/`Ctrl`)**, and **slide-jump vault** across a giant 3-layer 100%-solvable 3D Mahjong pyramid (`demos/mahjong_wars/`) with 1:1 FPS mouse lock (`app.set_cursor_locked`), tile-edge auto-mantle, camera roll + FOV kick, and a canted laser carbine viewmodel.
 - **Painted Tile Emblems, Alien Ghosts & SVG VFX:** 8 color-coded SVG Mahjong symbols painted **flat onto the 3D tile faces** (`draw.decal_flat`) so you must climb and parkour over the tower to spot pairs, SDF-sculpted floating alien ghosts with squash & stretch + world-space HP bars, SVG reticle/muzzle flash/ecto rings, and expanding **Jade & Gold Chinese Talisman Shockwave Seals** (`seal.svg`).
 - **Pause & Settings Menu (`Esc`):** Interactive zero-dependency `ui_slider` calibration for Mouse Sensitivity, Master Volume, Field of View, Invert Y, and Audio Mute.
 - **Chinese Pentatonic War Music:** Seamless D-major pentatonic Guzheng + Erhu + Taiko war drums + woodblock loop (`seam=0.0003`) + bronze gong match chime and 6 tactical SFX.
@@ -59,7 +59,7 @@ A warm, sunlit 6-hole 2D mini golf stroll showcasing Dullahan's pure-2D pipeline
   1. **Assets & shaders** (`.glb`, `.png`, `.svg`, `.wav`, `pbr.vert/.frag`, `post.frag`) hot-reload live in-place with safe error fallbacks.
   2. **Tuning, tables & levels** (`data/*.cfg`, `.tbl`, `.lvl`) hot-reload live with 1-line Git diffs.
   3. **Rust logic** uses sub-second rebuild + schema-tolerant plaintext state snapshots (`./scripts/fast_restart.sh`) instead of fragile `dlopen`.
-- **Closed-loop runtime verification (zero MCP):** Control and inspect live or `--headless` runs via the tiny `dctl` Unix-socket CLI.
+- **Closed-loop runtime verification (zero MCP):** Control and inspect live or `--headless` runs via the tiny `dctl` CLI (Unix socket on Linux, loopback TCP on Windows).
 
 ---
 
@@ -109,7 +109,9 @@ DullahanFramework/
 │       ├── assets_src/            # Plaintext Artisan .pal/.mdl/.sfx sources
 │       └── data/                  # *.cfg live tuning
 ├── skills/dullahan-framework/     # Companion generic LLM skill (SKILL.md)
-└── scripts/fast_restart.sh        # Tier 3 sub-second snapshot-preserving restart
+└── scripts/
+    ├── fast_restart.sh            # Tier 3 sub-second snapshot-preserving restart
+    └── build_windows_bundle.sh    # Cross-compile portable Windows x64 bundle from Linux
 ```
 
 ## Documentation

@@ -1,6 +1,6 @@
 # Dullahan Framework — Architecture Specification
 
-**Status:** Draft v0.1 (Linux-first)  
+**Status:** Early v0.1 (Linux & Windows)  
 **Goal:** A zero-dependency, flat, hot-reloadable, LLM-first Rust game framework designed for sub-second iteration, Git-friendly data-driven development, and closed-loop visual/state verification.
 
 ---
@@ -44,24 +44,27 @@ DullahanFramework/
 │   │   └── dctl.rs                # Tiny CLI client for the runtime control socket (~120 LOC)
 │   └── dullahan/                  # Vendored framework (~5–6.5k LOC total)
 │       ├── mod.rs                 # Public facade & App frame lifecycle
-│       ├── platform/
-│       │   ├── mod.rs             # Thin OS-neutral Platform interface
-│       │   └── linux.rs           # X11 + GLX (GL 3.3 Core) + ALSA + clock + mtime (~900 LOC)
-│       ├── math.rs                # Plain-field Vec2/3/4, Mat4, Quat, Transform, Aabb, Ray (~500 LOC)
-│       ├── formats/
-│       │   ├── mod.rs
-│       │   ├── png.rs             # RFC 1950/1951 PNG decode (8-bit RGB/RGBA + 16-bit gray) & encode (~550 LOC)
-│       │   ├── wav.rs             # PCM 16-bit & float32 WAV loader + linear resampler (~150 LOC)
-│       │   ├── gltf.rs            # glTF 2.0 (.glb & .gltf+.bin) mesh/PBR/node/collider parser (~650 LOC)
-│       │   └── svg.rs             # Game-UI SVG subset -> anti-aliased RGBA rasterizer (~700 LOC)
-│       ├── gfx.rs                 # OpenGL 3.3 Core PBR renderer, 2D/9-slice UI, font, debug draw (~1200 LOC)
-│       ├── audio.rs               # Lock-free ringbuffer mixer (one-shots, loops, buses) (~400 LOC)
-│       ├── data.rs                # .cfg/.tbl/.lvl parser, Pool<T>, schema-tolerant Snapshot (~550 LOC)
-│       ├── assets.rs              # Handle registry, file watcher, hot-reload & error fallbacks (~450 LOC)
-│       ├── geom.rs                # Optional pure collision/raycast/heightmap queries (~350 LOC)
-│       └── dev.rs                 # Unix socket command bridge, headless runner, screenshot/step (~400 LOC)
-├── assets/                        # Standard asset files (.glb, .png, .svg, .wav, .glsl)
-└── data/                          # Git-friendly plaintext data (.cfg, .tbl, .lvl)
+│   │   ├── platform/
+│   │   │   ├── mod.rs             # Thin OS-neutral Platform + OpenGL 3.3 Core table
+│   │   │   ├── linux.rs           # X11 + GLX (GL 3.3 Core) + EGL headless + FPS cursor lock
+│   │   │   └── windows.rs         # Win32 + WGL (GL 3.3 Core) + hidden-window FBO + FPS cursor lock
+│   │   ├── math.rs                # Plain-field Vec2/3/4, Mat4, Quat, Transform, Aabb, Ray
+│   │   ├── formats/
+│   │   │   ├── mod.rs
+│   │   │   ├── json.rs            # Pure-Rust RFC 8259 JSON parser
+│   │   │   ├── png.rs             # RFC 1950/1951 PNG decode (8-bit RGB/RGBA + 16-bit gray) & encode
+│   │   │   ├── wav.rs             # PCM 16-bit & float32 WAV loader + linear resampler
+│   │   │   ├── gltf.rs            # glTF 2.0 (.glb & .gltf+.bin) mesh/PBR/node/collider parser
+│   │   │   └── svg.rs             # Game-UI SVG subset -> 4x4 AA RGBA rasterizer
+│   │   ├── font.rs                # Built-in 5x7 ASCII bitmap font atlas
+│   │   ├── gfx.rs                 # OpenGL 3.3 Core PBR, shadows, post-FX, 3D decals, 2D & UI batcher
+│   │   ├── audio.rs               # 48 kHz stereo mixer (ALSA on Linux, WinMM on Windows, null fallback)
+│   │   ├── data.rs                # .cfg/.tbl/.lvl parser, Pool<T>, schema-tolerant Snapshot
+│   │   ├── assets.rs              # Handle registry, file watcher, hot-reload & error fallbacks
+│   │   ├── geom.rs                # Optional pure collision/raycast/heightmap/rigid-body queries
+│   │   └── dev.rs                 # Local command bridge (Unix socket / Windows TCP), headless runner, scripts
+├── demos/                         # Self-contained showcase games (neon_rush, mahjong_wars, cozy_golf)
+└── scripts/                       # fast_restart.sh & build_windows_bundle.sh
 ```
 
 ### Non-Constraining Ownership Rule
@@ -90,20 +93,20 @@ fn main() {
 
 ---
 
-## 3. Linux Platform & Zero-Dependency FFI (`platform/linux.rs`)
+## 3. Platform Layer & Zero-Dependency FFI (`platform/`)
 
-For v1, we target Linux directly via runtime-linked system libraries—zero Cargo dependencies, zero `build.rs`, zero C compiler required.
+Dullahan targets **Linux and Windows** directly via runtime-linked OS libraries—zero Cargo dependencies, zero `build.rs`, zero external SDKs required.
 
-| Subsystem | Linux System Library | Notes |
+| Subsystem | Linux (`platform/linux.rs`) | Windows (`platform/windows.rs`) |
 | :--- | :--- | :--- |
-| Window & Input | `libX11.so.6` | Keyboard (scancode + keycode), mouse (cursor + relative capture for FPS/3D), resize, close, focus |
-| GPU Context | `libGL.so.1` (GLX) | Requests **OpenGL 3.3 Core Profile** via `glXCreateContextAttribsARB`; loads ~60 GL procs via `glXGetProcAddressARB` |
-| Offscreen / Headless | GLX Pbuffer / Hidden X11 Window | Allows `--headless` screenshots and deterministic playtests with GPU rendering (works under Xvfb too) |
-| Audio Output | `libasound.so.2` (ALSA) | Opens `"default"` PCM device (works on ALSA, PulseAudio, and PipeWire via `pipewire-alsa`); dynamically loaded via `dlopen` with automatic silent null fallback in headless/CI environments |
-| Time & Files | `std::time` / `std::fs` / `libc` (`dlopen`, Unix sockets via `std::os::unix::net`) | File hot-reload uses lightweight `metadata().modified()` polling (100ms cadence)—zero `inotify` edge cases with atomic editor renames |
+| Window & Input | `libX11.so.6` (keyboard, mouse, FPS cursor lock, resize, focus) | `user32.dll` (DPI-aware Win32 window, keyboard, mouse, FPS cursor lock, maximize/resize) |
+| GPU Context | `libGL.so.1` (GLX `glXCreateContextAttribsARB` -> OpenGL 3.3 Core) | `gdi32.dll` + `opengl32.dll` (WGL `wglCreateContextAttribsARB` -> OpenGL 3.3 Core + VSync) |
+| Offscreen / Headless | `libEGL.so.1` surfaceless/pbuffer + offscreen FBO (works with `DISPLAY` unset) | Hidden Win32 window + OpenGL 3.3 Core offscreen FBO |
+| Audio Output | `libasound.so.2` (ALSA via `dlopen`, automatic silent null fallback) | `winmm.dll` (`waveOut` 4-buffer 48 kHz stereo ring, automatic silent null fallback) |
+| Runtime Dev Bridge | Unix domain socket (`std::os::unix::net`, default `/tmp/dullahan.sock`) | Loopback TCP (`std::net`, default `127.0.0.1:42420`) |
 
 ### Portability Seam
-All OS specifics live behind `platform/mod.rs` (`Window`, `InputState`, `AudioDevice`, `GlLoader`). Adding Windows (`user32` + `opengl32` + `wasapi`) or macOS later only requires implementing `platform/windows.rs` or `platform/macos.rs` without changing any other module.
+All OS specifics live behind `platform/mod.rs`, `audio.rs`, and `dev.rs`. Game code, math, formats, renderer, physics, and data layers are 100% OS-agnostic; additional OS backends can be added later without changing any other module.
 
 ---
 
@@ -222,7 +225,7 @@ light   point   4.0 3.0 -2.5  color=#ffaa44 radius=8.0 intensity=2.0
 
 ## 7. Closed-Loop Runtime Bridge (`dev.rs` & `dctl`)
 
-Inspired by Artisan's closed-loop CLI workflow, every Dullahan app in dev mode binds a local Unix domain socket (default `/tmp/dullahan.sock`, configurable via `--sock <path>`).
+Inspired by Artisan's closed-loop CLI workflow, every Dullahan app in dev mode binds a local control endpoint (Unix socket `/tmp/dullahan.sock` on Linux, loopback TCP `127.0.0.1:42420` on Windows, configurable via `--sock <path-or-addr>`).
 
 An LLM (or human) interacts with the live game using a single tiny CLI binary (`dctl`, or plain `socat`/`nc -U`)—no MCP server, no browser tooling, no polling boilerplate:
 
