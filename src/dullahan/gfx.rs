@@ -1237,12 +1237,13 @@ const SHADOW_VERT: &str = r#"#version 330 core
 layout(location = 0) in vec3 a_pos;
 #ifdef INSTANCED
 layout(location = 4) in mat4 a_inst;
+uniform mat4 u_node;
 #endif
 uniform mat4 u_light_vp;
 uniform mat4 u_model;
 void main() {
 #ifdef INSTANCED
-    mat4 model = u_model * a_inst;
+    mat4 model = u_model * a_inst * u_node;
 #else
     mat4 model = u_model;
 #endif
@@ -1260,8 +1261,9 @@ layout(location = 1) in vec3 a_norm;
 layout(location = 2) in vec2 a_uv;
 layout(location = 3) in vec4 a_color;
 #ifdef INSTANCED
-// Per-instance transform (locations 4-7). Compiled with `#define INSTANCED` for mesh_instances.
+// Per-instance transform (locations 4-7) & mesh-local node transform (`u_node`).
 layout(location = 4) in mat4 a_inst;
+uniform mat4 u_node;
 #endif
 
 uniform mat4 u_view_proj;
@@ -1276,7 +1278,7 @@ out vec4 v_light_pos;
 
 void main() {
 #ifdef INSTANCED
-    mat4 model = u_model * a_inst;
+    mat4 model = u_model * a_inst * u_node;
     vec3 n = mat3(model) * a_norm; // instances use uniform scale
 #else
     mat4 model = u_model;
@@ -1663,6 +1665,7 @@ struct PbrUniforms {
     view_proj: GLint,
     model: GLint,
     light_vp: GLint,
+    node: GLint,
     base_tex: GLint,
     mr_tex: GLint,
     occ_tex: GLint,
@@ -1701,6 +1704,7 @@ impl PbrUniforms {
             view_proj: uniform_loc(gl, prog, "u_view_proj"),
             model: uniform_loc(gl, prog, "u_model"),
             light_vp: uniform_loc(gl, prog, "u_light_vp"),
+            node: uniform_loc(gl, prog, "u_node"),
             base_tex: uniform_loc(gl, prog, "u_base_tex"),
             mr_tex: uniform_loc(gl, prog, "u_mr_tex"),
             occ_tex: uniform_loc(gl, prog, "u_occ_tex"),
@@ -1743,6 +1747,7 @@ pub struct Gfx {
     shadow_inst_prog: GLuint,
     u_shadow_inst_lvp: GLint,
     u_shadow_inst_model: GLint,
+    u_shadow_inst_node: GLint,
 
     solid_prog: GLuint,
     u_solid_vp: GLint,
@@ -1943,6 +1948,7 @@ impl Gfx {
             pbr_inst_prog,
             u_shadow_inst_lvp: uniform_loc(gl, shadow_inst_prog, "u_light_vp"),
             u_shadow_inst_model: uniform_loc(gl, shadow_inst_prog, "u_model"),
+            u_shadow_inst_node: uniform_loc(gl, shadow_inst_prog, "u_node"),
             shadow_inst_prog,
             u_solid_vp: uniform_loc(gl, solid_prog, "u_view_proj"),
             u_solid_model: uniform_loc(gl, solid_prog, "u_model"),
@@ -2156,6 +2162,7 @@ impl Gfx {
             prim: &'a GpuPrimitive,
             mat: &'a GpuMaterial,
             model: Mat4,
+            node_model: Mat4,
             tint: Color,
             cam_dist_sq: f32,
             in_view: bool,
@@ -2199,7 +2206,7 @@ impl Gfx {
 
                 for prim in prims {
                     let mat = &gpu_mesh.materials[prim.material_idx];
-                    let item = FlatPrim { prim, mat, model: world_m, tint: cmd.tint, cam_dist_sq: dist_sq, in_view, in_shadow, instances: None };
+                    let item = FlatPrim { prim, mat, model: world_m, node_model: Mat4::IDENTITY, tint: cmd.tint, cam_dist_sq: dist_sq, in_view, in_shadow, instances: None };
                     if mat.alpha_mode == AlphaMode::Blend || cmd.tint.a < 0.999 {
                         if in_view {
                             blend_prims.push(item);
@@ -2235,7 +2242,7 @@ impl Gfx {
                 for prim in prims {
                     let mat = &gpu_mesh.materials[prim.material_idx];
                     inst_prims.push(FlatPrim {
-                        prim, mat, model: cmd.model * node_mats[ni], tint: cmd.tint,
+                        prim, mat, model: cmd.model, node_model: node_mats[ni], tint: cmd.tint,
                         cam_dist_sq: 0.0, in_view, in_shadow, instances: Some(inst),
                     });
                 }
@@ -2281,6 +2288,7 @@ impl Gfx {
                             (gl.glEnable)(GL_CULL_FACE);
                         }
                         (gl.glUniformMatrix4fv)(self.u_shadow_inst_model, 1, GL_FALSE, item.model.m.as_ptr());
+                        (gl.glUniformMatrix4fv)(self.u_shadow_inst_node, 1, GL_FALSE, item.node_model.m.as_ptr());
                         (gl.glBindVertexArray)(item.prim.vao);
                         draw_elements_instanced(gl, item.prim, item.instances.unwrap());
                     }
@@ -2375,7 +2383,7 @@ impl Gfx {
                 self.bind_pbr_frame_uniforms(gl, false, vp, light_vp, draw);
 
                 for item in opaque_prims.iter().filter(|p| p.in_view) {
-                    self.draw_pbr_prim(gl, assets, item.prim, item.mat, item.model, item.tint, None);
+                    self.draw_pbr_prim(gl, assets, item.prim, item.mat, item.model, item.node_model, item.tint, None);
                     stats.draw_calls += 1;
                     stats.triangles += (item.prim.index_count / 3) as u32;
                 }
@@ -2384,10 +2392,10 @@ impl Gfx {
                     self.bind_pbr_frame_uniforms(gl, true, vp, light_vp, draw);
                     for item in inst_prims.iter().filter(|p| p.in_view) {
                         let inst = item.instances.unwrap();
-                        self.draw_pbr_prim(gl, assets, item.prim, item.mat, item.model, item.tint, Some(inst));
+                        self.draw_pbr_prim(gl, assets, item.prim, item.mat, item.model, item.node_model, item.tint, Some(inst));
                         stats.draw_calls += 1;
                         stats.instances += inst.count;
-                        stats.triangles = stats.triangles.saturating_add((item.prim.index_count / 3) as u32 * inst.count);
+                        stats.triangles = stats.triangles.saturating_add(((item.prim.index_count / 3) as u32).saturating_mul(inst.count));
                     }
                     self.bind_pbr_frame_uniforms(gl, false, vp, light_vp, draw);
                 }
@@ -2395,7 +2403,7 @@ impl Gfx {
                 if !blend_prims.is_empty() {
                     (gl.glDepthMask)(GL_FALSE);
                     for item in &blend_prims {
-                        self.draw_pbr_prim(gl, assets, item.prim, item.mat, item.model, item.tint, None);
+                        self.draw_pbr_prim(gl, assets, item.prim, item.mat, item.model, item.node_model, item.tint, None);
                         stats.draw_calls += 1;
                         stats.triangles += (item.prim.index_count / 3) as u32;
                     }
@@ -2669,6 +2677,7 @@ impl Gfx {
         prim: &GpuPrimitive,
         mat: &GpuMaterial,
         model: Mat4,
+        node_model: Mat4,
         tint: Color,
         instances: Option<&GpuInstances>,
     ) {
@@ -2690,6 +2699,9 @@ impl Gfx {
             (gl.glBindTexture)(GL_TEXTURE_2D, assets.texture(mat.emissive_tex).id);
 
             (gl.glUniformMatrix4fv)(u.model, 1, GL_FALSE, model.m.as_ptr());
+            if instances.is_some() {
+                (gl.glUniformMatrix4fv)(u.node, 1, GL_FALSE, node_model.m.as_ptr());
+            }
             let bc = mat.base_color_factor;
             (gl.glUniform4f)(u.base_factor, bc[0], bc[1], bc[2], bc[3]);
             (gl.glUniform4f)(u.tint, tint.r, tint.g, tint.b, tint.a);

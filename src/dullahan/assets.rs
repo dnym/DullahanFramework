@@ -843,16 +843,50 @@ fn make_checkerboard_8x8() -> Vec<u8> {
 mod tests {
     use super::*;
 
+    fn build_minimal_triangle_glb() -> Vec<u8> {
+        let mut bin = Vec::new();
+        for f in [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+            bin.extend_from_slice(&f.to_le_bytes());
+        }
+        for idx in [0u16, 1, 2] {
+            bin.extend_from_slice(&idx.to_le_bytes());
+        }
+        while bin.len() % 4 != 0 {
+            bin.push(0);
+        }
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"buffers":[{{"byteLength":{}}}],"bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":36}},{{"buffer":0,"byteOffset":36,"byteLength":6}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}},{{"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}},"indices":1}}]}}],"nodes":[{{"mesh":0}}],"scenes":[{{"nodes":[0]}}],"scene":0}}"#,
+            bin.len()
+        );
+        let mut json_bytes = json.into_bytes();
+        while json_bytes.len() % 4 != 0 {
+            json_bytes.push(b' ');
+        }
+        let total = 12 + 8 + json_bytes.len() + 8 + bin.len();
+        let mut glb = Vec::with_capacity(total);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total as u32).to_le_bytes());
+        glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+        glb.extend_from_slice(&0x4E4F_534Au32.to_le_bytes()); // JSON
+        glb.extend_from_slice(&json_bytes);
+        glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        glb.extend_from_slice(&0x004E_4942u32.to_le_bytes()); // BIN\0
+        glb.extend_from_slice(&bin);
+        glb
+    }
+
     #[test]
     fn loader_threads_parse_and_report_results() {
-        let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/demos/neon_rush/assets/models"));
-        let mut glbs: Vec<PathBuf> = fs::read_dir(&dir)
-            .unwrap()
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|x| x == "glb"))
-            .collect();
-        glbs.sort();
-        assert!(!glbs.is_empty());
+        let dir = std::env::temp_dir().join(format!("dullahan_loader_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let bytes = build_minimal_triangle_glb();
+        let mut glbs = Vec::new();
+        for i in 0..4 {
+            let p = dir.join(format!("tri_{i}.glb"));
+            fs::write(&p, &bytes).unwrap();
+            glbs.push(p);
+        }
         glbs.push(dir.join("does_not_exist.glb"));
 
         let loader = MeshLoader::new();
@@ -870,5 +904,6 @@ mod tests {
             assert_eq!(r.model.is_err(), missing, "{}", glbs[i].display());
         }
         drop(loader); // must join workers without hanging
+        let _ = fs::remove_dir_all(&dir);
     }
 }
