@@ -1,6 +1,6 @@
 # Dullahan Framework
 
-A **zero-dependency, flat, hot-reloadable, LLM-first Rust game framework** (Linux-first) built for sub-second iteration, Git-friendly data-driven design, and closed-loop visual/state verification.
+A **zero-dependency, flat, hot-reloadable, LLM-first Rust game framework** (Linux & Windows) built for sub-second iteration, Git-friendly data-driven design, and closed-loop visual/state verification.
 
 > **Early Version:** Dullahan Framework is in an early, actively evolving stage. APIs and module layouts may change as features mature. Built with **0 external Cargo crates** (`[dependencies]` is empty).
 
@@ -52,7 +52,7 @@ A warm, sunlit 6-hole 2D mini golf stroll showcasing Dullahan's pure-2D pipeline
 
 ## Why Dullahan?
 
-- **Zero Cargo dependencies:** Pure Rust + minimal `extern "C"` Linux OS FFI (`libX11`, `libGL`, `libEGL`, `libasound`). Clean builds in **~1.1s**, incremental rebuilds in **~0.25s**, zero crate API drift.
+- **Zero Cargo dependencies:** Pure Rust + minimal `extern` OS FFI (Linux: `libX11`, `libGL`, `libEGL`, `libasound`; Windows: `user32`, `gdi32`, `opengl32`, `winmm`). Clean builds in **~1.1s**, incremental rebuilds in **~0.25s**, zero crate API drift.
 - **Flat, explicit, non-constraining:** The game owns `fn main()`, the loop, and one flat `GameState` backed by plain `Vec`s or generational `Pool<T>` arenas. No forced ECS, OOP scene graph, or monolithic physics engine.
 - **Standard formats only:** Pure-Rust loaders for `.glb`/`.gltf` (PBR + named child nodes + `col` colliders), `.png` (8-bit & 16-bit heightmaps + PNG encoder), `.svg` (4×4 AA rasterizer), `.wav`, and `.glsl`. Pairs naturally with [Dullahan Artisan](https://github.com/jayzone80/DullahanArtisan) or any external asset pipeline.
 - **Git-friendly data & 3-tier live iteration:**
@@ -63,7 +63,7 @@ A warm, sunlit 6-hole 2D mini golf stroll showcasing Dullahan's pure-2D pipeline
 
 ---
 
-## Quick Start (Linux)
+## Quick Start (Linux & Windows)
 
 ```bash
 # Run framework unit tests (0 external crates)
@@ -81,10 +81,13 @@ cargo run --bin dctl -- set player.jump_vel 17.0
 cargo run --bin dctl -- overlay colliders
 cargo run --bin dctl -- screenshot /tmp/live.png
 
-# Headless deterministic render (works without X11 / DISPLAY):
+# Headless deterministic render (works without a display on Linux & Windows):
 cargo run -p neon_rush -- --headless --size 1280x720 --frames 15 --snap /tmp/neon.png
 cargo run -p mahjong_wars -- --headless --size 1280x720 --frames 14 --snap /tmp/mahjong.png
 cargo run -p cozy_golf -- --headless --size 1280x720 --frames 10 --snap /tmp/cozy.png
+
+# Cross-compile a portable Windows x64 USB bundle from Linux (requires mingw-w64-gcc):
+./scripts/build_windows_bundle.sh
 ```
 
 ## Repository Layout

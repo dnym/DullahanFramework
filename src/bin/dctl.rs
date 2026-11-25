@@ -7,10 +7,16 @@
 //!   dctl --sock /tmp/custom.sock step 10
 
 use std::io::{BufRead, BufReader, Write};
+#[cfg(not(unix))]
+use std::net::TcpStream;
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 
+#[cfg(unix)]
 const DEFAULT_SOCK: &str = "/tmp/dullahan.sock";
+#[cfg(not(unix))]
+const DEFAULT_SOCK: &str = "127.0.0.1:42420";
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -35,7 +41,11 @@ fn main() -> ExitCode {
     }
 
     let line = format!("{}\n", cmd_parts.join(" "));
-    let mut stream = match UnixStream::connect(&sock) {
+    #[cfg(unix)]
+    let conn = UnixStream::connect(&sock);
+    #[cfg(not(unix))]
+    let conn = TcpStream::connect(&sock);
+    let mut stream = match conn {
         Ok(s) => s,
         Err(e) => {
             eprintln!("dctl: failed to connect to {sock}: {e}");

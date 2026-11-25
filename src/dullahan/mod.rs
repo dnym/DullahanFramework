@@ -15,16 +15,15 @@ pub mod platform;
 use assets::{Assets, MeshHandle, SoundHandle, TexHandle};
 use audio::{AudioBus, AudioEngine, PlayParams, VoiceId};
 use data::{DataStore, Snapshot};
-use dev::{AppConfig, DevAction, DevBridge, PendingScreenshot};
+use dev::{AppConfig, DevAction, DevBridge, DevStream, PendingScreenshot};
 use gfx::{DrawList, Gfx};
 use platform::{GL_RENDERER, GL_VERSION, InputState, Platform};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 enum SnapshotReq {
-    Save(PathBuf, Option<UnixStream>),
-    Load(PathBuf, Option<UnixStream>),
+    Save(PathBuf, Option<DevStream>),
+    Load(PathBuf, Option<DevStream>),
 }
 
 pub struct App {
@@ -46,7 +45,7 @@ pub struct App {
     running: bool,
     sim_this_frame: bool,
     custom_state_text: String,
-    pending_game_cmds: Vec<(String, Option<UnixStream>)>,
+    pending_game_cmds: Vec<(String, Option<DevStream>)>,
     pending_snapshots: Vec<SnapshotReq>,
 }
 
@@ -78,9 +77,10 @@ impl App {
 
         let gl_ver = platform.gl.gl_string(GL_VERSION);
         let gl_ren = platform.gl.gl_string(GL_RENDERER);
+        let win_mode = if cfg!(target_os = "windows") { "win32" } else { "x11" };
         eprintln!(
             "[dullahan] ready mode={} size={}x{} audio={} gl=\"{}\" renderer=\"{}\"",
-            if config.headless { "headless" } else { "x11" },
+            if config.headless { "headless" } else { win_mode },
             platform.width,
             platform.height,
             audio.backend_name,

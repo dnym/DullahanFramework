@@ -5,6 +5,7 @@
 //! - Mixing DSP (`MixerState`) is pure Rust and fully unit-tested offline.
 
 use crate::dullahan::formats::wav::{AudioClip, TARGET_SAMPLE_RATE};
+#[cfg(target_os = "linux")]
 use std::ffi::{CString, c_char, c_int, c_long, c_uint, c_void};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -262,22 +263,22 @@ impl AudioEngine {
             };
         }
 
-        match AlsaDevice::open() {
-            Ok(alsa) => {
+        match AudioOutDevice::open() {
+            Ok((dev, name)) => {
                 let (tx, rx) = mpsc::channel();
                 let stop_clone = stop_flag.clone();
-                let handle = thread::spawn(move || audio_thread_main(alsa, rx, stop_clone));
+                let handle = thread::spawn(move || audio_thread_main(dev, rx, stop_clone));
                 Self {
                     tx: Some(tx),
                     stop_flag,
                     worker: Some(handle),
                     next_id: 1,
                     rng_state: 0x9E37_79B9_7F4A_7C15,
-                    backend_name: "alsa",
+                    backend_name: name,
                 }
             }
             Err(e) => {
-                eprintln!("[audio] ALSA unavailable ({e}); running in silent fallback mode");
+                eprintln!("[audio] backend unavailable ({e}); running in silent fallback mode");
                 Self {
                     tx: None,
                     stop_flag,
@@ -374,7 +375,7 @@ impl Drop for AudioEngine {
     }
 }
 
-fn audio_thread_main(mut alsa: AlsaDevice, rx: Receiver<AudioCmd>, stop: Arc<AtomicBool>) {
+fn audio_thread_main(mut dev: AudioOutDevice, rx: Receiver<AudioCmd>, stop: Arc<AtomicBool>) {
     let mut mixer = MixerState::default();
     let mut mix_buf = [[0.0f32; 2]; CHUNK_FRAMES];
     let mut pcm_i16 = [0i16; CHUNK_FRAMES * 2];
@@ -388,25 +389,30 @@ fn audio_thread_main(mut alsa: AlsaDevice, rx: Receiver<AudioCmd>, stop: Arc<Ato
             pcm_i16[i * 2] = (mix_buf[i][0].clamp(-1.0, 1.0) * 32767.0) as i16;
             pcm_i16[i * 2 + 1] = (mix_buf[i][1].clamp(-1.0, 1.0) * 32767.0) as i16;
         }
-        alsa.write_frames(&pcm_i16, CHUNK_FRAMES);
+        dev.write_frames(&pcm_i16, CHUNK_FRAMES);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Minimal ALSA FFI (`libasound.so.2`) via `dlopen`
+// Minimal ALSA FFI (`libasound.so.2`) via `dlopen` (Linux)
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "linux")]
 unsafe extern "C" {
     fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     fn dlclose(handle: *mut c_void) -> c_int;
 }
 
+#[cfg(target_os = "linux")]
 const SND_PCM_STREAM_PLAYBACK: c_int = 0;
+#[cfg(target_os = "linux")]
 const SND_PCM_FORMAT_S16_LE: c_int = 2;
+#[cfg(target_os = "linux")]
 const SND_PCM_ACCESS_RW_INTERLEAVED: c_int = 3;
 
-struct AlsaDevice {
+#[cfg(target_os = "linux")]
+struct AudioOutDevice {
     lib: *mut c_void,
     pcm: *mut c_void,
     snd_pcm_writei: unsafe extern "C" fn(*mut c_void, *const c_void, c_long) -> c_long,
@@ -414,10 +420,12 @@ struct AlsaDevice {
     snd_pcm_close: unsafe extern "C" fn(*mut c_void) -> c_int,
 }
 
-unsafe impl Send for AlsaDevice {}
+#[cfg(target_os = "linux")]
+unsafe impl Send for AudioOutDevice {}
 
-impl AlsaDevice {
-    fn open() -> Result<Self, String> {
+#[cfg(target_os = "linux")]
+impl AudioOutDevice {
+    fn open() -> Result<(Self, &'static str), String> {
         let lib_name = CString::new("libasound.so.2").unwrap();
         let lib = unsafe { dlopen(lib_name.as_ptr(), 2) };
         if lib.is_null() {
@@ -474,13 +482,16 @@ impl AlsaDevice {
             return Err(format!("snd_pcm_set_params returned {rc2}"));
         }
 
-        Ok(Self {
-            lib,
-            pcm,
-            snd_pcm_writei,
-            snd_pcm_recover,
-            snd_pcm_close,
-        })
+        Ok((
+            Self {
+                lib,
+                pcm,
+                snd_pcm_writei,
+                snd_pcm_recover,
+                snd_pcm_close,
+            },
+            "alsa",
+        ))
     }
 
     fn write_frames(&mut self, samples: &[i16], frames: usize) {
@@ -493,7 +504,8 @@ impl AlsaDevice {
     }
 }
 
-impl Drop for AlsaDevice {
+#[cfg(target_os = "linux")]
+impl Drop for AudioOutDevice {
     fn drop(&mut self) {
         unsafe {
             if !self.pcm.is_null() {
@@ -505,6 +517,154 @@ impl Drop for AlsaDevice {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Minimal Windows Multimedia (`winmm.dll` waveOut) stereo output
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+mod winmm {
+    use super::{CHUNK_FRAMES, TARGET_SAMPLE_RATE};
+    use std::ffi::{c_char, c_uint, c_ulong, c_ushort, c_void};
+    use std::ptr;
+    use std::time::Duration;
+
+    type HWAVEOUT = *mut c_void;
+    type MMRESULT = c_uint;
+    const WAVE_MAPPER: c_uint = 0xFFFF_FFFF;
+    const WAVE_FORMAT_PCM: c_ushort = 1;
+    const WHDR_DONE: c_ulong = 0x0000_0001;
+    const WHDR_INQUEUE: c_ulong = 0x0000_0010;
+    const NUM_BUFS: usize = 4;
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct WAVEFORMATEX {
+        wFormatTag: c_ushort,
+        nChannels: c_ushort,
+        nSamplesPerSec: c_ulong,
+        nAvgBytesPerSec: c_ulong,
+        nBlockAlign: c_ushort,
+        wBitsPerSample: c_ushort,
+        cbSize: c_ushort,
+    }
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct WAVEHDR {
+        lpData: *mut c_char,
+        dwBufferLength: c_ulong,
+        dwBytesRecorded: c_ulong,
+        dwUser: usize,
+        dwFlags: c_ulong,
+        dwLoops: c_ulong,
+        lpNext: *mut WAVEHDR,
+        reserved: usize,
+    }
+
+    #[link(name = "winmm")]
+    unsafe extern "system" {
+        fn waveOutOpen(
+            phwo: *mut HWAVEOUT,
+            uDeviceID: c_uint,
+            pwfx: *const WAVEFORMATEX,
+            dwCallback: usize,
+            dwInstance: usize,
+            fdwOpen: c_ulong,
+        ) -> MMRESULT;
+        fn waveOutPrepareHeader(hwo: HWAVEOUT, pwh: *mut WAVEHDR, cbwh: c_uint) -> MMRESULT;
+        fn waveOutUnprepareHeader(hwo: HWAVEOUT, pwh: *mut WAVEHDR, cbwh: c_uint) -> MMRESULT;
+        fn waveOutWrite(hwo: HWAVEOUT, pwh: *mut WAVEHDR, cbwh: c_uint) -> MMRESULT;
+        fn waveOutReset(hwo: HWAVEOUT) -> MMRESULT;
+        fn waveOutClose(hwo: HWAVEOUT) -> MMRESULT;
+    }
+
+    pub struct AudioOutDevice {
+        hwo: HWAVEOUT,
+        bufs: Box<[[i16; CHUNK_FRAMES * 2]; NUM_BUFS]>,
+        hdrs: Box<[WAVEHDR; NUM_BUFS]>,
+        cursor: usize,
+    }
+
+    unsafe impl Send for AudioOutDevice {}
+
+    impl AudioOutDevice {
+        pub fn open() -> Result<(Self, &'static str), String> {
+            let wfx = WAVEFORMATEX {
+                wFormatTag: WAVE_FORMAT_PCM,
+                nChannels: 2,
+                nSamplesPerSec: TARGET_SAMPLE_RATE as c_ulong,
+                nAvgBytesPerSec: (TARGET_SAMPLE_RATE * 4) as c_ulong,
+                nBlockAlign: 4,
+                wBitsPerSample: 16,
+                cbSize: 0,
+            };
+            let mut hwo: HWAVEOUT = ptr::null_mut();
+            let rc = unsafe { waveOutOpen(&mut hwo, WAVE_MAPPER, &wfx, 0, 0, 0) };
+            if rc != 0 || hwo.is_null() {
+                return Err(format!("waveOutOpen returned {rc}"));
+            }
+
+            let mut bufs = Box::new([[0i16; CHUNK_FRAMES * 2]; NUM_BUFS]);
+            let mut hdrs = Box::new(std::array::from_fn(|_| WAVEHDR {
+                lpData: ptr::null_mut(),
+                dwBufferLength: (CHUNK_FRAMES * 4) as c_ulong,
+                dwBytesRecorded: 0,
+                dwUser: 0,
+                dwFlags: WHDR_DONE,
+                dwLoops: 0,
+                lpNext: ptr::null_mut(),
+                reserved: 0,
+            }));
+
+            let hdr_sz = std::mem::size_of::<WAVEHDR>() as c_uint;
+            for i in 0..NUM_BUFS {
+                hdrs[i].lpData = bufs[i].as_mut_ptr() as *mut c_char;
+                hdrs[i].dwFlags = 0;
+                unsafe {
+                    waveOutPrepareHeader(hwo, &mut hdrs[i], hdr_sz);
+                }
+                hdrs[i].dwFlags |= WHDR_DONE;
+            }
+
+            Ok((Self { hwo, bufs, hdrs, cursor: 0 }, "winmm"))
+        }
+
+        pub fn write_frames(&mut self, samples: &[i16], frames: usize) {
+            let i = self.cursor;
+            let hdr_sz = std::mem::size_of::<WAVEHDR>() as c_uint;
+            // Wait until this ring buffer slot finishes playback
+            let mut spins = 0u32;
+            while (unsafe { ptr::read_volatile(&self.hdrs[i].dwFlags) } & WHDR_INQUEUE) != 0 && spins < 200 {
+                std::thread::sleep(Duration::from_millis(2));
+                spins += 1;
+            }
+            let n = (frames * 2).min(CHUNK_FRAMES * 2).min(samples.len());
+            self.bufs[i][..n].copy_from_slice(&samples[..n]);
+            self.hdrs[i].dwBufferLength = (n * 2) as c_ulong;
+            unsafe {
+                waveOutWrite(self.hwo, &mut self.hdrs[i], hdr_sz);
+            }
+            self.cursor = (self.cursor + 1) % NUM_BUFS;
+        }
+    }
+
+    impl Drop for AudioOutDevice {
+        fn drop(&mut self) {
+            let hdr_sz = std::mem::size_of::<WAVEHDR>() as c_uint;
+            unsafe {
+                waveOutReset(self.hwo);
+                for i in 0..NUM_BUFS {
+                    waveOutUnprepareHeader(self.hwo, &mut self.hdrs[i], hdr_sz);
+                }
+                waveOutClose(self.hwo);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+use winmm::AudioOutDevice;
 
 #[cfg(test)]
 mod tests {

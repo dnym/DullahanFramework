@@ -1,8 +1,14 @@
 //! OS-neutral platform types, input state, OpenGL 3.3 Core function table, and backend selection.
 
+#[cfg(target_os = "linux")]
 pub mod linux;
-
+#[cfg(target_os = "linux")]
 pub use linux::Platform;
+
+#[cfg(target_os = "windows")]
+pub mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::Platform;
 
 use crate::dullahan::math::Vec2;
 use std::ffi::{c_char, c_float, c_int, c_uchar, c_uint, c_void};
@@ -271,84 +277,84 @@ pub const GL_FRAMEBUFFER_COMPLETE: GLenum = 0x8CD5;
 /// Loaded OpenGL 3.3 Core function pointers.
 #[allow(non_snake_case)]
 pub struct GlFns {
-    pub glGetError: unsafe extern "C" fn() -> GLenum,
-    pub glGetString: unsafe extern "C" fn(GLenum) -> *const c_uchar,
-    pub glViewport: unsafe extern "C" fn(GLint, GLint, GLsizei, GLsizei),
-    pub glClearColor: unsafe extern "C" fn(GLfloat, GLfloat, GLfloat, GLfloat),
-    pub glClear: unsafe extern "C" fn(GLbitfield),
-    pub glEnable: unsafe extern "C" fn(GLenum),
-    pub glDisable: unsafe extern "C" fn(GLenum),
-    pub glDepthFunc: unsafe extern "C" fn(GLenum),
-    pub glDepthMask: unsafe extern "C" fn(GLboolean),
-    pub glColorMask: unsafe extern "C" fn(GLboolean, GLboolean, GLboolean, GLboolean),
-    pub glCullFace: unsafe extern "C" fn(GLenum),
-    pub glFrontFace: unsafe extern "C" fn(GLenum),
-    pub glBlendFunc: unsafe extern "C" fn(GLenum, GLenum),
-    pub glPolygonMode: unsafe extern "C" fn(GLenum, GLenum),
-    pub glLineWidth: unsafe extern "C" fn(GLfloat),
-    pub glPixelStorei: unsafe extern "C" fn(GLenum, GLint),
-    pub glReadPixels: unsafe extern "C" fn(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, *mut c_void),
-    pub glFinish: unsafe extern "C" fn(),
+    pub glGetError: unsafe extern "system" fn() -> GLenum,
+    pub glGetString: unsafe extern "system" fn(GLenum) -> *const c_uchar,
+    pub glViewport: unsafe extern "system" fn(GLint, GLint, GLsizei, GLsizei),
+    pub glClearColor: unsafe extern "system" fn(GLfloat, GLfloat, GLfloat, GLfloat),
+    pub glClear: unsafe extern "system" fn(GLbitfield),
+    pub glEnable: unsafe extern "system" fn(GLenum),
+    pub glDisable: unsafe extern "system" fn(GLenum),
+    pub glDepthFunc: unsafe extern "system" fn(GLenum),
+    pub glDepthMask: unsafe extern "system" fn(GLboolean),
+    pub glColorMask: unsafe extern "system" fn(GLboolean, GLboolean, GLboolean, GLboolean),
+    pub glCullFace: unsafe extern "system" fn(GLenum),
+    pub glFrontFace: unsafe extern "system" fn(GLenum),
+    pub glBlendFunc: unsafe extern "system" fn(GLenum, GLenum),
+    pub glPolygonMode: unsafe extern "system" fn(GLenum, GLenum),
+    pub glLineWidth: unsafe extern "system" fn(GLfloat),
+    pub glPixelStorei: unsafe extern "system" fn(GLenum, GLint),
+    pub glReadPixels: unsafe extern "system" fn(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, *mut c_void),
+    pub glFinish: unsafe extern "system" fn(),
 
-    pub glGenVertexArrays: unsafe extern "C" fn(GLsizei, *mut GLuint),
-    pub glBindVertexArray: unsafe extern "C" fn(GLuint),
-    pub glDeleteVertexArrays: unsafe extern "C" fn(GLsizei, *const GLuint),
+    pub glGenVertexArrays: unsafe extern "system" fn(GLsizei, *mut GLuint),
+    pub glBindVertexArray: unsafe extern "system" fn(GLuint),
+    pub glDeleteVertexArrays: unsafe extern "system" fn(GLsizei, *const GLuint),
 
-    pub glGenBuffers: unsafe extern "C" fn(GLsizei, *mut GLuint),
-    pub glBindBuffer: unsafe extern "C" fn(GLenum, GLuint),
-    pub glBufferData: unsafe extern "C" fn(GLenum, GLsizeiptr, *const c_void, GLenum),
-    pub glBufferSubData: unsafe extern "C" fn(GLenum, GLintptr, GLsizeiptr, *const c_void),
-    pub glDeleteBuffers: unsafe extern "C" fn(GLsizei, *const GLuint),
+    pub glGenBuffers: unsafe extern "system" fn(GLsizei, *mut GLuint),
+    pub glBindBuffer: unsafe extern "system" fn(GLenum, GLuint),
+    pub glBufferData: unsafe extern "system" fn(GLenum, GLsizeiptr, *const c_void, GLenum),
+    pub glBufferSubData: unsafe extern "system" fn(GLenum, GLintptr, GLsizeiptr, *const c_void),
+    pub glDeleteBuffers: unsafe extern "system" fn(GLsizei, *const GLuint),
 
-    pub glEnableVertexAttribArray: unsafe extern "C" fn(GLuint),
-    pub glVertexAttribPointer: unsafe extern "C" fn(GLuint, GLint, GLenum, GLboolean, GLsizei, *const c_void),
+    pub glEnableVertexAttribArray: unsafe extern "system" fn(GLuint),
+    pub glVertexAttribPointer: unsafe extern "system" fn(GLuint, GLint, GLenum, GLboolean, GLsizei, *const c_void),
 
-    pub glCreateShader: unsafe extern "C" fn(GLenum) -> GLuint,
-    pub glShaderSource: unsafe extern "C" fn(GLuint, GLsizei, *const *const c_char, *const GLint),
-    pub glCompileShader: unsafe extern "C" fn(GLuint),
-    pub glGetShaderiv: unsafe extern "C" fn(GLuint, GLenum, *mut GLint),
-    pub glGetShaderInfoLog: unsafe extern "C" fn(GLuint, GLsizei, *mut GLsizei, *mut c_char),
-    pub glDeleteShader: unsafe extern "C" fn(GLuint),
+    pub glCreateShader: unsafe extern "system" fn(GLenum) -> GLuint,
+    pub glShaderSource: unsafe extern "system" fn(GLuint, GLsizei, *const *const c_char, *const GLint),
+    pub glCompileShader: unsafe extern "system" fn(GLuint),
+    pub glGetShaderiv: unsafe extern "system" fn(GLuint, GLenum, *mut GLint),
+    pub glGetShaderInfoLog: unsafe extern "system" fn(GLuint, GLsizei, *mut GLsizei, *mut c_char),
+    pub glDeleteShader: unsafe extern "system" fn(GLuint),
 
-    pub glCreateProgram: unsafe extern "C" fn() -> GLuint,
-    pub glAttachShader: unsafe extern "C" fn(GLuint, GLuint),
-    pub glLinkProgram: unsafe extern "C" fn(GLuint),
-    pub glGetProgramiv: unsafe extern "C" fn(GLuint, GLenum, *mut GLint),
-    pub glGetProgramInfoLog: unsafe extern "C" fn(GLuint, GLsizei, *mut GLsizei, *mut c_char),
-    pub glUseProgram: unsafe extern "C" fn(GLuint),
-    pub glDeleteProgram: unsafe extern "C" fn(GLuint),
+    pub glCreateProgram: unsafe extern "system" fn() -> GLuint,
+    pub glAttachShader: unsafe extern "system" fn(GLuint, GLuint),
+    pub glLinkProgram: unsafe extern "system" fn(GLuint),
+    pub glGetProgramiv: unsafe extern "system" fn(GLuint, GLenum, *mut GLint),
+    pub glGetProgramInfoLog: unsafe extern "system" fn(GLuint, GLsizei, *mut GLsizei, *mut c_char),
+    pub glUseProgram: unsafe extern "system" fn(GLuint),
+    pub glDeleteProgram: unsafe extern "system" fn(GLuint),
 
-    pub glGetUniformLocation: unsafe extern "C" fn(GLuint, *const c_char) -> GLint,
-    pub glUniform1i: unsafe extern "C" fn(GLint, GLint),
-    pub glUniform1f: unsafe extern "C" fn(GLint, GLfloat),
-    pub glUniform2f: unsafe extern "C" fn(GLint, GLfloat, GLfloat),
-    pub glUniform3f: unsafe extern "C" fn(GLint, GLfloat, GLfloat, GLfloat),
-    pub glUniform4f: unsafe extern "C" fn(GLint, GLfloat, GLfloat, GLfloat, GLfloat),
-    pub glUniformMatrix4fv: unsafe extern "C" fn(GLint, GLsizei, GLboolean, *const GLfloat),
+    pub glGetUniformLocation: unsafe extern "system" fn(GLuint, *const c_char) -> GLint,
+    pub glUniform1i: unsafe extern "system" fn(GLint, GLint),
+    pub glUniform1f: unsafe extern "system" fn(GLint, GLfloat),
+    pub glUniform2f: unsafe extern "system" fn(GLint, GLfloat, GLfloat),
+    pub glUniform3f: unsafe extern "system" fn(GLint, GLfloat, GLfloat, GLfloat),
+    pub glUniform4f: unsafe extern "system" fn(GLint, GLfloat, GLfloat, GLfloat, GLfloat),
+    pub glUniformMatrix4fv: unsafe extern "system" fn(GLint, GLsizei, GLboolean, *const GLfloat),
 
-    pub glDrawArrays: unsafe extern "C" fn(GLenum, GLint, GLsizei),
-    pub glDrawElements: unsafe extern "C" fn(GLenum, GLsizei, GLenum, *const c_void),
+    pub glDrawArrays: unsafe extern "system" fn(GLenum, GLint, GLsizei),
+    pub glDrawElements: unsafe extern "system" fn(GLenum, GLsizei, GLenum, *const c_void),
 
-    pub glGenTextures: unsafe extern "C" fn(GLsizei, *mut GLuint),
-    pub glBindTexture: unsafe extern "C" fn(GLenum, GLuint),
-    pub glDeleteTextures: unsafe extern "C" fn(GLsizei, *const GLuint),
-    pub glTexImage2D: unsafe extern "C" fn(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, *const c_void),
-    pub glTexParameteri: unsafe extern "C" fn(GLenum, GLenum, GLint),
-    pub glActiveTexture: unsafe extern "C" fn(GLenum),
+    pub glGenTextures: unsafe extern "system" fn(GLsizei, *mut GLuint),
+    pub glBindTexture: unsafe extern "system" fn(GLenum, GLuint),
+    pub glDeleteTextures: unsafe extern "system" fn(GLsizei, *const GLuint),
+    pub glTexImage2D: unsafe extern "system" fn(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, *const c_void),
+    pub glTexParameteri: unsafe extern "system" fn(GLenum, GLenum, GLint),
+    pub glActiveTexture: unsafe extern "system" fn(GLenum),
 
-    pub glGenFramebuffers: unsafe extern "C" fn(GLsizei, *mut GLuint),
-    pub glBindFramebuffer: unsafe extern "C" fn(GLenum, GLuint),
-    pub glDeleteFramebuffers: unsafe extern "C" fn(GLsizei, *const GLuint),
-    pub glFramebufferTexture2D: unsafe extern "C" fn(GLenum, GLenum, GLenum, GLuint, GLint),
-    pub glFramebufferRenderbuffer: unsafe extern "C" fn(GLenum, GLenum, GLenum, GLuint),
-    pub glCheckFramebufferStatus: unsafe extern "C" fn(GLenum) -> GLenum,
-    pub glDrawBuffer: unsafe extern "C" fn(GLenum),
-    pub glReadBuffer: unsafe extern "C" fn(GLenum),
+    pub glGenFramebuffers: unsafe extern "system" fn(GLsizei, *mut GLuint),
+    pub glBindFramebuffer: unsafe extern "system" fn(GLenum, GLuint),
+    pub glDeleteFramebuffers: unsafe extern "system" fn(GLsizei, *const GLuint),
+    pub glFramebufferTexture2D: unsafe extern "system" fn(GLenum, GLenum, GLenum, GLuint, GLint),
+    pub glFramebufferRenderbuffer: unsafe extern "system" fn(GLenum, GLenum, GLenum, GLuint),
+    pub glCheckFramebufferStatus: unsafe extern "system" fn(GLenum) -> GLenum,
+    pub glDrawBuffer: unsafe extern "system" fn(GLenum),
+    pub glReadBuffer: unsafe extern "system" fn(GLenum),
 
-    pub glGenRenderbuffers: unsafe extern "C" fn(GLsizei, *mut GLuint),
-    pub glBindRenderbuffer: unsafe extern "C" fn(GLenum, GLuint),
-    pub glDeleteRenderbuffers: unsafe extern "C" fn(GLsizei, *const GLuint),
-    pub glRenderbufferStorage: unsafe extern "C" fn(GLenum, GLenum, GLsizei, GLsizei),
+    pub glGenRenderbuffers: unsafe extern "system" fn(GLsizei, *mut GLuint),
+    pub glBindRenderbuffer: unsafe extern "system" fn(GLenum, GLuint),
+    pub glDeleteRenderbuffers: unsafe extern "system" fn(GLsizei, *const GLuint),
+    pub glRenderbufferStorage: unsafe extern "system" fn(GLenum, GLenum, GLsizei, GLsizei),
 }
 
 impl GlFns {

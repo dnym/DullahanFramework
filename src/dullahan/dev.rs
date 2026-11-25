@@ -1,14 +1,32 @@
-//! Closed-loop runtime dev bridge (Unix domain socket) + headless script runner.
+//! Closed-loop runtime dev bridge (Unix socket on Linux, TCP loopback on Windows) + headless script runner.
 
 use crate::dullahan::gfx::DebugOverlay;
 use crate::dullahan::platform::{InputState, Key};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
+#[cfg(not(unix))]
+use std::net::{TcpListener, TcpStream};
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+pub type DevStream = UnixStream;
+#[cfg(unix)]
+type DevListener = UnixListener;
+#[cfg(unix)]
 pub const DEFAULT_SOCK_PATH: &str = "/tmp/dullahan.sock";
+#[cfg(unix)]
 pub const DEFAULT_SNAP_PATH: &str = "/tmp/dullahan_state.snap";
+
+#[cfg(not(unix))]
+pub type DevStream = TcpStream;
+#[cfg(not(unix))]
+type DevListener = TcpListener;
+#[cfg(not(unix))]
+pub const DEFAULT_SOCK_PATH: &str = "127.0.0.1:42420";
+#[cfg(not(unix))]
+pub const DEFAULT_SNAP_PATH: &str = "dullahan_state.snap";
 
 /// Parsed command-line configuration for an `App`.
 #[derive(Clone, Debug)]
@@ -112,6 +130,25 @@ impl AppConfig {
             cfg.max_frames = Some(1);
         }
 
+        // Portable bundle fallback: if `assets/` or `data/` aren't in CWD (e.g. double-clicking
+        // a Windows .exe from a USB stick), look right next to the executable.
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(exe_dir) = exe.parent()
+        {
+            if !cfg.asset_root.exists() {
+                let cand = exe_dir.join("assets");
+                if cand.exists() {
+                    cfg.asset_root = cand;
+                }
+            }
+            if !cfg.data_root.exists() {
+                let cand = exe_dir.join("data");
+                if cand.exists() {
+                    cfg.data_root = cand;
+                }
+            }
+        }
+
         cfg
     }
 }
@@ -127,7 +164,7 @@ fn parse_size(s: &str) -> Option<(u32, u32)> {
 
 pub struct PendingScreenshot {
     pub path: PathBuf,
-    pub reply_stream: Option<UnixStream>,
+    pub reply_stream: Option<DevStream>,
 }
 
 pub struct ScriptEntry {
@@ -136,7 +173,7 @@ pub struct ScriptEntry {
 }
 
 pub struct DevBridge {
-    listener: Option<UnixListener>,
+    listener: Option<DevListener>,
     sock_path: Option<PathBuf>,
     script: Vec<ScriptEntry>,
     pub paused: bool,
@@ -148,19 +185,28 @@ pub struct DevBridge {
 pub enum DevAction {
     None,
     Quit,
-    Reload { stream: Option<UnixStream> },
-    SetConfig { key: String, val: String, stream: Option<UnixStream> },
-    SnapshotSave { path: PathBuf, stream: Option<UnixStream> },
-    SnapshotLoad { path: PathBuf, stream: Option<UnixStream> },
+    Reload { stream: Option<DevStream> },
+    SetConfig { key: String, val: String, stream: Option<DevStream> },
+    SnapshotSave { path: PathBuf, stream: Option<DevStream> },
+    SnapshotLoad { path: PathBuf, stream: Option<DevStream> },
     SetOverlay(DebugOverlay),
-    GameCmd { args: String, stream: Option<UnixStream> },
+    GameCmd { args: String, stream: Option<DevStream> },
 }
 
 impl DevBridge {
     pub fn new(sock_path: Option<PathBuf>, script_path: Option<&Path>) -> Self {
         let listener = sock_path.as_ref().and_then(|p| {
-            let _ = fs::remove_file(p);
-            match UnixListener::bind(p) {
+            #[cfg(unix)]
+            let bound = {
+                let _ = fs::remove_file(p);
+                DevListener::bind(p)
+            };
+            #[cfg(not(unix))]
+            let bound = {
+                let addr = p.to_str().unwrap_or(DEFAULT_SOCK_PATH);
+                DevListener::bind(addr)
+            };
+            match bound {
                 Ok(l) => {
                     let _ = l.set_nonblocking(true);
                     Some(l)
@@ -262,7 +308,7 @@ impl DevBridge {
         line: &str,
         state_summary: &str,
         input: &mut InputState,
-        mut stream: Option<UnixStream>,
+        mut stream: Option<DevStream>,
     ) -> DevAction {
         let mut parts = line.split_whitespace();
         let Some(cmd) = parts.next() else {
@@ -378,6 +424,7 @@ impl DevBridge {
 
 impl Drop for DevBridge {
     fn drop(&mut self) {
+        #[cfg(unix)]
         if let Some(p) = &self.sock_path
             && self.listener.is_some()
         {
@@ -386,7 +433,7 @@ impl Drop for DevBridge {
     }
 }
 
-pub fn reply(stream: &mut Option<UnixStream>, msg: &str) {
+pub fn reply(stream: &mut Option<DevStream>, msg: &str) {
     if let Some(s) = stream.as_mut() {
         let _ = s.write_all(msg.as_bytes());
         let _ = s.flush();
