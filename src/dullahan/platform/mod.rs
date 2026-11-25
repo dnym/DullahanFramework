@@ -169,6 +169,12 @@ impl InputState {
         let i = btn as usize;
         self.mouse_down[i] && !self.mouse_prev[i]
     }
+
+    #[inline]
+    pub fn mouse_released(&self, btn: MouseButton) -> bool {
+        let i = btn as usize;
+        !self.mouse_down[i] && self.mouse_prev[i]
+    }
 }
 
 // ---------------------------------------------------------------------------

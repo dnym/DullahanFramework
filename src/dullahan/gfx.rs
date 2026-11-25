@@ -796,6 +796,48 @@ impl DrawList {
         });
     }
 
+    /// Draws a solid 2D rectangle centered at `(cx, cy)` rotated clockwise by `angle_rad`.
+    pub fn ui_rect_rot(&mut self, cx: f32, cy: f32, w: f32, h: f32, angle_rad: f32, color: Color) {
+        self.ui_quads.push(UiQuadCmd {
+            tex: UiTex::White,
+            x: cx - w * 0.5,
+            y: cy - h * 0.5,
+            w,
+            h,
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            angle: angle_rad,
+            color,
+        });
+    }
+
+    /// Draws a crisp thick 2D line segment from `a` to `b` (great for aiming trajectories, walls, and 2D debug draw).
+    pub fn ui_line(&mut self, a: Vec2, b: Vec2, thickness: f32, color: Color) {
+        let d = b - a;
+        let len = d.len();
+        if len < 0.25 {
+            return;
+        }
+        let mid = (a + b) * 0.5;
+        let angle = d.y.atan2(d.x);
+        self.ui_rect_rot(mid.x, mid.y, len + thickness * 0.25, thickness, angle, color);
+    }
+
+    /// Draws a 2D circular outline (useful for pond ripples, aiming rings, and 2D collider overlays).
+    pub fn ui_circle_outline(&mut self, cx: f32, cy: f32, radius: f32, thickness: f32, segments: u32, color: Color) {
+        let segs = segments.max(8);
+        let step = std::f32::consts::TAU / segs as f32;
+        for i in 0..segs {
+            let a0 = i as f32 * step;
+            let a1 = (i + 1) as f32 * step;
+            let p0 = Vec2::new(cx + a0.cos() * radius, cy + a0.sin() * radius);
+            let p1 = Vec2::new(cx + a1.cos() * radius, cy + a1.sin() * radius);
+            self.ui_line(p0, p1, thickness, color);
+        }
+    }
+
     pub fn ui_panel(&mut self, x: f32, y: f32, w: f32, h: f32, bg: Color, border: Color, border_px: f32) {
         self.ui_rect(x, y, w, h, bg);
         if border_px > 0.0 {

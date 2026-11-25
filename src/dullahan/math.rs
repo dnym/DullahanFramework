@@ -153,6 +153,34 @@ impl Mul<f32> for Vec2 {
         Self::new(self.x * s, self.y * s)
     }
 }
+impl Div<f32> for Vec2 {
+    type Output = Self;
+    #[inline]
+    fn div(self, s: f32) -> Self {
+        Self::new(self.x / s, self.y / s)
+    }
+}
+impl AddAssign for Vec2 {
+    #[inline]
+    fn add_assign(&mut self, r: Self) {
+        self.x += r.x;
+        self.y += r.y;
+    }
+}
+impl SubAssign for Vec2 {
+    #[inline]
+    fn sub_assign(&mut self, r: Self) {
+        self.x -= r.x;
+        self.y -= r.y;
+    }
+}
+impl MulAssign<f32> for Vec2 {
+    #[inline]
+    fn mul_assign(&mut self, s: f32) {
+        self.x *= s;
+        self.y *= s;
+    }
+}
 impl Neg for Vec2 {
     type Output = Self;
     #[inline]

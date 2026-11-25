@@ -1,0 +1,33 @@
+sfx cozy_meadow bpm=96 bars=4 bpb=4 sr=44100 ch=2 loop=1 xfade=0.04 curve=lin norm=-3 seed=42
+
+def brush
+  noi pink env=0.004,0.06,0,0.02 g=0.22 | flt bp 3600 q=1.2
+end
+
+def soft_kick
+  osc sin 74 penv=110>58:0.08:exp env=0.005,0.22,0,0.05 g=0.52 | flt lp 240
+end
+
+def guitar
+  plk 349.23 damp=0.995 br=0.56 env=0.003,0.68,0.12,0.22 g=0.62 | flt lp 2600
+end
+
+def kalimba
+  osc sin 523.25 env=0.002,0.42,0.05,0.12 g=0.45
+  osc tri 1046.50 env=0.002,0.12,0,0.04 g=0.14 | flt lp 3200
+end
+
+def warm_bass
+  osc tri 116.54 env=0.02,0.45,0.35,0.16 g=0.42 | flt lp 420
+end
+
+pat soft_kick "x.......x......." step=0.25 rep=4 g=0.65
+pat brush     "..x...x...x...x." step=0.25 rep=4 g=0.38 pan=0.18
+
+seq warm_bass "F2:2 C2:2 D2:2 A1:2 Bb1:2 F2:2 G2:2 C2:2" gate=0.88 g=0.72
+
+seq guitar "F3:.5 A3:.5 C4:.5 F4:.5 E4:.5 C4:.5 A3:.5 C4:.5 D4:.5 F4:.5 A4:.5 F4:.5 E4:.5 C4:.5 A3:.5 C4:.5 Bb3:.5 D4:.5 F4:.5 Bb4:.5 A4:.5 F4:.5 C4:.5 F4:.5 G3:.5 Bb3:.5 D4:.5 G4:.5 E4:1 C4:1" gate=0.92 g=0.68 pan=-0.12 | dly b=0.75 mix=0.18 fb=0.20 damp=2200 | rev room=0.62 mix=0.28
+
+seq kalimba "A4:1.5 G4:.5 F4:1 C5:1 A4:1.5 G4:.5 F4:2 D5:1 C5:1 A4:1 F4:1 G4:1.5 A4:.5 G4:2" gate=0.84 g=0.52 pan=0.18 | rev room=0.70 mix=0.32
+
+bus | flt hp 32 | cmp thr=-12 rat=2.2 atk=0.015 rel=0.18 | wid 1.12

@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "cozy_golf"
+version = "0.1.0"
+dependencies = [
+ "dullahan",
+]
+
+[[package]]
 name = "dullahan"
 version = "0.1.0"
 

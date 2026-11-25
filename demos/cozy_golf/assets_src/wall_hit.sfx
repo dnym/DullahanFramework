@@ -1,0 +1,4 @@
+sfx wall_hit dur=0.16 sr=44100 ch=1 norm=-2
+osc sin 460 penv=540>360:0.022:exp env=0.001,0.06,0,0.02 g=0.78 | flt bp 680 q=2.0
+noi pink env=0.001,0.025,0,0.01 g=0.30 | flt lp 1200
+bus | flt hp 80

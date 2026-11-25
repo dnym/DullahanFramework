@@ -1,0 +1,4 @@
+sfx splash dur=0.42 sr=44100 ch=1 norm=-2
+osc sin 420 penv=220>640:0.09:exp env=0.004,0.18,0,0.06 g=0.68
+noi pink t=0.02 env=0.008,0.24,0,0.09 g=0.55 | flt bp 1100 q=1.1
+bus | flt hp 80 | rev room=0.50 mix=0.24

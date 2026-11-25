@@ -1,0 +1,4 @@
+sfx bumper dur=0.36 sr=44100 ch=1 norm=-1
+osc sin 320 penv=240>580:0.08:exp env=0.002,0.24,0,0.06 g=0.85
+osc tri 640 penv=480>920:0.07:exp env=0.002,0.16,0,0.04 g=0.35 | flt lp 2200
+bus | flt hp 60 | rev room=0.45 mix=0.22

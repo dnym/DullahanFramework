@@ -1,0 +1,5 @@
+sfx boost dur=0.38 sr=44100 ch=1 norm=-2
+plk 523.25 t=0.00 damp=0.992 br=0.75 env=0.002,0.20,0,0.06 g=0.60
+plk 659.25 t=0.06 damp=0.992 br=0.75 env=0.002,0.22,0,0.06 g=0.65
+plk 783.99 t=0.12 damp=0.993 br=0.80 env=0.002,0.24,0,0.06 g=0.70
+bus | flt hp 90 | rev room=0.55 mix=0.26

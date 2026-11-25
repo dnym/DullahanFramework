@@ -1,0 +1,4 @@
+sfx putt dur=0.18 sr=44100 ch=1 norm=-2
+osc tri 290 penv=420>165:0.035:exp env=0.001,0.075,0,0.025 g=0.85 | flt lp 1400
+noi white env=0.001,0.022,0,0.008 g=0.28 | flt bp 1800 q=1.8
+bus | flt hp 65
