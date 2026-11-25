@@ -13,7 +13,10 @@ use crate::dullahan::math::Aabb;
 use crate::dullahan::platform::GlFns;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -40,13 +43,117 @@ struct TexEntry {
     in_use: bool,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MeshState {
+    /// Uploaded and drawable.
+    Ready,
+    /// Queued or parsing on a background thread (`load_mesh_async`); not drawn yet.
+    Loading,
+    /// Unloaded; the slot is reused by the next load.
+    Free,
+}
+
 struct MeshEntry {
     path: PathBuf,
     mtime: Option<SystemTime>,
     dep_mtimes: Vec<(PathBuf, Option<SystemTime>)>,
     embedded_tex_handles: Vec<TexHandle>,
-    gpu: GpuMesh,
+    gpu: Option<GpuMesh>,
     is_fallback: bool,
+    state: MeshState,
+    /// Bumped on unload so stale background results for a reused slot are dropped.
+    generation: u32,
+}
+
+impl MeshEntry {
+    fn free() -> Self {
+        Self {
+            path: PathBuf::new(),
+            mtime: None,
+            dep_mtimes: Vec::new(),
+            embedded_tex_handles: Vec::new(),
+            gpu: None,
+            is_fallback: false,
+            state: MeshState::Free,
+            generation: 0,
+        }
+    }
+}
+
+/// Per-frame summary of background mesh loading (see `Assets::poll_loads`).
+#[derive(Copy, Clone, Debug, Default)]
+pub struct LoadReport {
+    /// Meshes uploaded to the GPU this frame.
+    pub uploaded: u32,
+    /// Milliseconds spent uploading this frame.
+    pub upload_ms: f32,
+    /// Parsed meshes waiting for upload (over budget).
+    pub waiting_upload: u32,
+    /// Meshes queued or parsing on worker threads.
+    pub in_flight: u32,
+}
+
+struct LoadJob {
+    idx: u32,
+    generation: u32,
+    path: PathBuf,
+}
+
+struct LoadResult {
+    idx: u32,
+    generation: u32,
+    mtime: Option<SystemTime>,
+    model: Result<GltfModel, String>,
+}
+
+/// Worker threads that read and parse glTF files (CPU only); GL upload stays on the main thread.
+struct MeshLoader {
+    jobs: Option<Sender<LoadJob>>,
+    results: Receiver<LoadResult>,
+    workers: Vec<JoinHandle<()>>,
+    in_flight: u32,
+}
+
+impl MeshLoader {
+    fn new() -> Self {
+        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).saturating_sub(1).clamp(1, 4);
+        let (job_tx, job_rx) = channel::<LoadJob>();
+        let (res_tx, res_rx) = channel::<LoadResult>();
+        let job_rx = Arc::new(Mutex::new(job_rx));
+        let workers = (0..threads)
+            .map(|i| {
+                let rx = Arc::clone(&job_rx);
+                let tx = res_tx.clone();
+                std::thread::Builder::new()
+                    .name(format!("dullahan-load-{i}"))
+                    .spawn(move || {
+                        loop {
+                            let job = match rx.lock() {
+                                Ok(guard) => guard.recv(),
+                                Err(_) => return,
+                            };
+                            let Ok(job) = job else { return };
+                            let mtime = file_mtime(&job.path);
+                            let model = gltf::load_gltf_file(&job.path);
+                            if tx.send(LoadResult { idx: job.idx, generation: job.generation, mtime, model }).is_err() {
+                                return;
+                            }
+                        }
+                    })
+                    .expect("spawn loader thread")
+            })
+            .collect();
+        Self { jobs: Some(job_tx), results: res_rx, workers, in_flight: 0 }
+    }
+}
+
+impl Drop for MeshLoader {
+    fn drop(&mut self) {
+        self.jobs = None; // closes the channel; workers exit after their current file
+        for w in self.workers.drain(..) {
+            let _ = w.join();
+        }
+    }
 }
 
 struct SoundEntry {
@@ -66,6 +173,8 @@ pub struct Assets {
     root: PathBuf,
     textures: Vec<TexEntry>,
     meshes: Vec<MeshEntry>,
+    loader: Option<MeshLoader>,
+    parsed: VecDeque<LoadResult>,
     sounds: Vec<SoundEntry>,
     pbr_shader_watch: ShaderWatch,
     post_frag_path: PathBuf,
@@ -109,6 +218,8 @@ impl Assets {
             textures,
             meshes: Vec::new(),
             sounds: Vec::new(),
+            loader: None,
+            parsed: VecDeque::new(),
             pbr_shader_watch,
             post_frag_path,
             post_frag_mtime,
@@ -214,10 +325,27 @@ impl Assets {
         })
     }
 
+    fn find_mesh(&self, full: &Path) -> Option<MeshHandle> {
+        self.meshes
+            .iter()
+            .position(|m| m.state != MeshState::Free && m.path == full)
+            .map(|i| MeshHandle(i as u32))
+    }
+
+    fn alloc_mesh_slot(&mut self, mut entry: MeshEntry) -> MeshHandle {
+        if let Some(i) = self.meshes.iter().position(|m| m.state == MeshState::Free) {
+            entry.generation = self.meshes[i].generation;
+            self.meshes[i] = entry;
+            return MeshHandle(i as u32);
+        }
+        self.meshes.push(entry);
+        MeshHandle(self.meshes.len() as u32 - 1)
+    }
+
     pub fn load_mesh<P: AsRef<Path>>(&mut self, gl: &GlFns, path: P) -> MeshHandle {
         let full = self.resolve_path(path.as_ref());
-        if let Some(idx) = self.meshes.iter().position(|m| m.path == full) {
-            return MeshHandle(idx as u32);
+        if let Some(h) = self.find_mesh(&full) {
+            return h;
         }
 
         let mtime = file_mtime(&full);
@@ -234,16 +362,101 @@ impl Assets {
             }
         };
 
-        let idx = self.meshes.len() as u32;
-        self.meshes.push(MeshEntry {
+        self.alloc_mesh_slot(MeshEntry {
             path: full,
             mtime,
             dep_mtimes,
             embedded_tex_handles,
-            gpu,
+            gpu: Some(gpu),
             is_fallback,
-        });
-        MeshHandle(idx)
+            state: MeshState::Ready,
+            generation: 0,
+        })
+    }
+
+    /// Starts loading a mesh on a background thread and returns its handle immediately.
+    /// The mesh is not drawn (and `mesh()` returns `None`) until `poll_loads` has uploaded it;
+    /// check with `mesh_state`. Loading the same path again returns the same handle.
+    pub fn load_mesh_async<P: AsRef<Path>>(&mut self, path: P) -> MeshHandle {
+        let full = self.resolve_path(path.as_ref());
+        if let Some(h) = self.find_mesh(&full) {
+            return h;
+        }
+        let mut entry = MeshEntry::free();
+        entry.path = full.clone();
+        entry.state = MeshState::Loading;
+        let h = self.alloc_mesh_slot(entry);
+        let generation = self.meshes[h.0 as usize].generation;
+        let loader = self.loader.get_or_insert_with(MeshLoader::new);
+        if let Some(tx) = &loader.jobs {
+            let _ = tx.send(LoadJob { idx: h.0, generation, path: full });
+            loader.in_flight += 1;
+        }
+        h
+    }
+
+    /// Uploads background-parsed meshes, spending at most about `budget` per call (always at
+    /// least one mesh, so loading never stalls). Call once per frame; `App` does this.
+    pub fn poll_loads(&mut self, gl: &GlFns, budget: Duration) -> LoadReport {
+        let mut report = LoadReport::default();
+        if let Some(loader) = &mut self.loader {
+            while let Ok(r) = loader.results.try_recv() {
+                loader.in_flight = loader.in_flight.saturating_sub(1);
+                self.parsed.push_back(r);
+            }
+        }
+        let start = Instant::now();
+        while let Some(r) = self.parsed.pop_front() {
+            let idx = r.idx as usize;
+            let live = self.meshes.get(idx).is_some_and(|m| m.state == MeshState::Loading && m.generation == r.generation);
+            if !live {
+                continue; // unloaded while loading
+            }
+            let (gpu, deps, emb, fallback) = match r.model.and_then(|m| self.upload_model(gl, m)) {
+                Ok((gpu, deps, emb)) => (gpu, deps, emb, false),
+                Err(e) => {
+                    self.record_error(format!("mesh {}: {e}", self.meshes[idx].path.display()));
+                    (gfx::create_fallback_mesh(gl, self.checker_tex, self.white_tex, self.black_tex), Vec::new(), Vec::new(), true)
+                }
+            };
+            let m = &mut self.meshes[idx];
+            m.gpu = Some(gpu);
+            m.dep_mtimes = deps;
+            m.embedded_tex_handles = emb;
+            m.mtime = r.mtime;
+            m.is_fallback = fallback;
+            m.state = MeshState::Ready;
+            report.uploaded += 1;
+            if start.elapsed() >= budget {
+                break;
+            }
+        }
+        report.upload_ms = start.elapsed().as_secs_f32() * 1000.0;
+        report.waiting_upload = self.parsed.len() as u32;
+        report.in_flight = self.loader.as_ref().map_or(0, |l| l.in_flight);
+        report
+    }
+
+    /// Frees a mesh's GPU resources (or cancels a pending async load). The handle becomes
+    /// invalid; its slot is reused by later loads.
+    pub fn unload_mesh(&mut self, gl: &GlFns, handle: MeshHandle) {
+        let Some(m) = self.meshes.get_mut(handle.0 as usize) else { return };
+        if m.state == MeshState::Free {
+            return;
+        }
+        let gpu = m.gpu.take();
+        let emb = std::mem::take(&mut m.embedded_tex_handles);
+        let generation = m.generation.wrapping_add(1);
+        *m = MeshEntry::free();
+        m.generation = generation;
+        if let Some(g) = gpu {
+            gfx::destroy_mesh(gl, &g);
+        }
+        self.release_embedded_tex_slots(&emb);
+    }
+
+    pub fn mesh_state(&self, handle: MeshHandle) -> MeshState {
+        self.meshes.get(handle.0 as usize).map_or(MeshState::Free, |m| m.state)
     }
 
     /// Creates a lit PBR terrain `MeshHandle` directly from a `HeightField` + optional color/splat texture.
@@ -257,16 +470,10 @@ impl Assets {
     ) -> MeshHandle {
         let tex = albedo_tex.unwrap_or(self.white_tex);
         let gpu = gfx::create_heightfield_mesh(gl, hf, tex, self.white_tex, self.black_tex, grid_x, grid_z);
-        let idx = self.meshes.len() as u32;
-        self.meshes.push(MeshEntry {
-            path: PathBuf::new(),
-            mtime: None,
-            dep_mtimes: Vec::new(),
-            embedded_tex_handles: Vec::new(),
-            gpu,
-            is_fallback: false,
-        });
-        MeshHandle(idx)
+        let mut entry = MeshEntry::free();
+        entry.gpu = Some(gpu);
+        entry.state = MeshState::Ready;
+        self.alloc_mesh_slot(entry)
     }
 
     pub fn load_sound<P: AsRef<Path>>(&mut self, path: P) -> SoundHandle {
@@ -370,7 +577,7 @@ impl Assets {
 
         // 2. Meshes (.glb / .gltf + external deps)
         for idx in 0..self.meshes.len() {
-            if self.meshes[idx].path.as_os_str().is_empty() {
+            if self.meshes[idx].state != MeshState::Ready || self.meshes[idx].path.as_os_str().is_empty() {
                 continue;
             }
             let path = self.meshes[idx].path.clone();
@@ -385,9 +592,11 @@ impl Assets {
                 self.meshes[idx].mtime = cur_mtime;
                 match self.build_gpu_mesh_from_file(gl, &path) {
                     Ok((new_gpu, new_deps, new_emb)) => {
-                        let old = std::mem::replace(&mut self.meshes[idx].gpu, new_gpu);
+                        let old = self.meshes[idx].gpu.replace(new_gpu);
                         let old_emb = std::mem::replace(&mut self.meshes[idx].embedded_tex_handles, new_emb);
-                        gfx::destroy_mesh(gl, &old);
+                        if let Some(old) = old {
+                            gfx::destroy_mesh(gl, &old);
+                        }
                         self.release_embedded_tex_slots(&old_emb);
                         self.meshes[idx].dep_mtimes = new_deps;
                         self.meshes[idx].is_fallback = false;
@@ -433,6 +642,15 @@ impl Assets {
         path: &Path,
     ) -> Result<(GpuMesh, Vec<(PathBuf, Option<SystemTime>)>, Vec<TexHandle>), String> {
         let model: GltfModel = gltf::load_gltf_file(path)?;
+        self.upload_model(gl, model)
+    }
+
+    /// GPU half of mesh loading: textures, materials and buffers for an already parsed model.
+    fn upload_model(
+        &mut self,
+        gl: &GlFns,
+        model: GltfModel,
+    ) -> Result<(GpuMesh, Vec<(PathBuf, Option<SystemTime>)>, Vec<TexHandle>), String> {
         let dep_mtimes: Vec<(PathBuf, Option<SystemTime>)> = model
             .dependencies
             .iter()
@@ -512,7 +730,7 @@ impl Assets {
     }
 
     pub fn mesh(&self, handle: MeshHandle) -> Option<&GpuMesh> {
-        self.meshes.get(handle.0 as usize).map(|e| &e.gpu)
+        self.meshes.get(handle.0 as usize).filter(|e| e.state == MeshState::Ready).and_then(|e| e.gpu.as_ref())
     }
 
     pub fn sound(&self, handle: SoundHandle) -> Option<&Arc<AudioClip>> {
@@ -536,12 +754,15 @@ impl Assets {
 
     pub fn counts(&self) -> (usize, usize, usize) {
         let active_tex = self.textures.iter().filter(|t| t.in_use).count();
-        (self.meshes.len(), active_tex, self.sounds.len())
+        let live_meshes = self.meshes.iter().filter(|m| m.state != MeshState::Free).count();
+        (live_meshes, active_tex, self.sounds.len())
     }
 
     pub fn destroy(&self, gl: &GlFns) {
         for m in &self.meshes {
-            gfx::destroy_mesh(gl, &m.gpu);
+            if let Some(g) = &m.gpu {
+                gfx::destroy_mesh(gl, g);
+            }
         }
         for t in &self.textures {
             // Skip embedded mesh textures (already freed by destroy_mesh)
@@ -574,4 +795,38 @@ fn make_checkerboard_8x8() -> Vec<u8> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loader_threads_parse_and_report_results() {
+        let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/demos/neon_rush/assets/models"));
+        let mut glbs: Vec<PathBuf> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "glb"))
+            .collect();
+        glbs.sort();
+        assert!(!glbs.is_empty());
+        glbs.push(dir.join("does_not_exist.glb"));
+
+        let loader = MeshLoader::new();
+        for (i, p) in glbs.iter().enumerate() {
+            loader.jobs.as_ref().unwrap().send(LoadJob { idx: i as u32, generation: 7, path: p.clone() }).unwrap();
+        }
+        let mut got: Vec<LoadResult> = (0..glbs.len())
+            .map(|_| loader.results.recv_timeout(Duration::from_secs(10)).expect("result"))
+            .collect();
+        got.sort_by_key(|r| r.idx);
+        for (i, r) in got.iter().enumerate() {
+            assert_eq!(r.idx as usize, i);
+            assert_eq!(r.generation, 7);
+            let missing = i == glbs.len() - 1;
+            assert_eq!(r.model.is_err(), missing, "{}", glbs[i].display());
+        }
+        drop(loader); // must join workers without hanging
+    }
 }
